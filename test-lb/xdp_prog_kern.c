@@ -2,6 +2,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 #include <linux/in.h>
+#include <string.h>
 
 #include "../common/parsing_helpers.h"
 #include "../common/rewrite_helpers.h"
@@ -70,7 +71,7 @@ int  xdp_prog_simple(struct xdp_md *ctx)
 	struct iphdr *iph;
 	// struct ipv6hdr *ipv6hdr;
 	struct udphdr *udph;
-	__u32 action = XDP_PASS; /* Default action */
+	__u32 action = XDP_DROP; /* Default action */
 	struct hdr_cursor nh;
 	// int nh_type;
 	int eth_type, ip_type;
@@ -102,13 +103,8 @@ int  xdp_prog_simple(struct xdp_md *ctx)
 	}
 	bpf_printk("parsed UDP header");
 
-	// bpf_printk("reached udp modification code");
-	// bpf_printk("destionation before is %u", udph->dest);
-	// bpf_printk("%u", bpf_ntohs(udph->dest));
-
 	if (bpf_ntohs(udph->dest) == 4172) {
 		bpf_printk("DST is 4172");
-		udph->source = udph->dest;
 		udph->dest = bpf_htons(bpf_ntohs(udph->dest)+1);
 
 		swap_src_dst_ipv4(iph);
@@ -128,33 +124,33 @@ OUT:
 }
 
 /* Solution to packet03/assignment-2 */
-// SEC("xdp_redirect")
-// int xdp_redirect_func(struct xdp_md *ctx)
-// {
-// 	void *data_end = (void *)(long)ctx->data_end;
-// 	void *data = (void *)(long)ctx->data;
-// 	struct hdr_cursor nh;
-// 	struct ethhdr *eth;
-// 	int eth_type;
-// 	int action = XDP_PASS;
-// 	unsigned char dst[ETH_ALEN] = {  };
-// 	unsigned ifindex = 0/* TODO: put your values here */;
+SEC("xdp_redirect")
+int xdp_redirect_func(struct xdp_md *ctx)
+{
+	void *data_end = (void *)(long)ctx->data_end;
+	void *data = (void *)(long)ctx->data;
+	struct hdr_cursor nh;
+	struct ethhdr *eth;
+	int eth_type;
+	int action = XDP_PASS; //86:25:f4:8c:c5:52
+	unsigned char dst[ETH_ALEN + 1] = { 0x86,0x25,0xf4,0x8c,0xc5,0x52, '\0' };
+	unsigned ifindex =  5; /* TODO: put your values here */
 
-// 	/* These keep track of the next header type and iterator pointer */
-// 	nh.pos = data;
+	/* These keep track of the next header type and iterator pointer */
+	nh.pos = data;
 
-// 	/* Parse Ethernet and IP/IPv6 headers */
-// 	eth_type = parse_ethhdr(&nh, data_end, &eth);
-// 	if (eth_type == -1)
-// 		goto out;
+	/* Parse Ethernet and IP/IPv6 headers */
+	eth_type = parse_ethhdr(&nh, data_end, &eth);
+	if (eth_type == -1)
+		goto out;
 
-// 	/* Set a proper destination address */
-// 	memcpy(eth->h_dest, dst, ETH_ALEN);
-// 	action = bpf_redirect(ifindex, 0);
+	/* Set a proper destination address */
+	memcpy(eth->h_dest, dst, ETH_ALEN);
+	action = bpf_redirect(ifindex, 0);
 
-// out:
-// 	return xdp_stats_record_action(ctx, action);
-// }
+out:
+	return action;
+}
 
 static __always_inline __u16 csum_fold_helper(__u32 csum)
 {

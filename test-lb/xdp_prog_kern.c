@@ -9,7 +9,7 @@
 #define MAX_OPT_WORDS 10 // 40 bytes for options
 #define MAX_TARGET_COUNT 64 // max number of target servers for LB
 #define REDIR_OPT_TYPE 42
-#define MAX_UDP_LENGTH 1480
+#define MAX_UDP_SIZE 1480
 
 #ifndef memcpy
 #define memcpy(dest, src, n) __builtin_memcpy((dest), (src), (n))
@@ -43,7 +43,7 @@ static __always_inline __u16 udp_checksum(struct iphdr *ip, struct udphdr * udp,
     csum += udp->len;
 
     // Compute checksum on udp header + payload
-    for (int i = 0; i < MAX_UDP_LENGTH; i += 2) {
+    for (int i = 0; i < MAX_UDP_SIZE; i += 2) {
         if ((void *)(buf + 1) > data_end) {
             break;
         }
@@ -56,7 +56,7 @@ static __always_inline __u16 udp_checksum(struct iphdr *ip, struct udphdr * udp,
         csum += *(__u8 *)buf;
     }
 
-   csum = ~csum;
+   //csum = ~csum;
    return csum;
 }
 
@@ -79,6 +79,14 @@ static __always_inline __u16 ip_checksum(unsigned short *buf, int bufsz) {
     return ~sum;
 }
 
+static __always_inline __u16 csum_reduce_helper(__u32 csum)
+{
+	csum = ((csum & 0xffff0000) >> 16) + (csum & 0xffff);
+	csum = ((csum & 0xffff0000) >> 16) + (csum & 0xffff);
+
+	return csum;
+}
+
 SEC("xdp")
 int  xdp_prog_simple(struct xdp_md *ctx)
 {
@@ -86,6 +94,7 @@ int  xdp_prog_simple(struct xdp_md *ctx)
 	void *data = (void *)(long)ctx->data;
 	struct ethhdr *ethh;
 	struct iphdr *iph;
+	__u32 size = sizeof(struct iphdr);
 	// struct ipv6hdr *ipv6hdr;
 	struct udphdr *udph;
 	__u32 action = XDP_DROP; /* Default action */
@@ -115,7 +124,6 @@ int  xdp_prog_simple(struct xdp_md *ctx)
 	bpf_printk("checked if UDP");
 
 	if (parse_udphdr(&nh, data_end, &udph) < 0) {
-		//action = XDP_DROP;
 		goto OUT;
 	}
 	bpf_printk("parsed UDP header");
@@ -130,13 +138,20 @@ int  xdp_prog_simple(struct xdp_md *ctx)
 		swap_src_dst_mac(ethh);
 		bpf_printk("Swapped eth addresses");
 
-		bpf_printk("destionation udp pot after is %u", bpf_ntohs(udph->dest));
-		iph->check = ip_checksum((__u16 *)iph, sizeof(struct iphdr));
-		udph->check = udp_checksum(iph, udph, data_end);
+		bpf_printk("destionation udp port after is %u", bpf_ntohs(udph->dest));
+
+		// Fix IP checksum
+		iph->check = 0;
+		iph->check = ~csum_reduce_helper(bpf_csum_diff(0, 0, (__be32 *)iph, size, 0));
+
+		//Fix UDP checksum
+		udph->check = 0;
+		// __u32 csum = udp_checksum(iph, udph, data_end);
+		// udph->check = ~csum_reduce_helper(csum);
+
 		action = XDP_TX;
 	}
 OUT:
-	// bpf_printk("went out");
 	return action;
 }
 
@@ -296,6 +311,70 @@ int xdp_redirect_map_func(struct xdp_md *ctx)
 	action = bpf_redirect_map(&tx_port, 0, 0);
 
 out:
+	return action;
+}
+
+/* Solution to packet03/assignment-3 */
+SEC("xdp_rm_udp")
+int xdp_rm_udp_func(struct xdp_md *ctx)
+{
+	void *data_end = (void *)(long)ctx->data_end;
+	void *data = (void *)(long)ctx->data;
+	struct ethhdr *ethh;
+	struct iphdr *iph;
+	// struct ipv6hdr *ipv6hdr;
+	struct udphdr *udph;
+	__u32 action = XDP_DROP; /* Default action */
+	struct hdr_cursor nh;
+	// int nh_type;
+	int eth_type, ip_type;
+	unsigned char *dst;
+
+	nh.pos = data;
+
+	eth_type = parse_ethhdr(&nh, data_end, &ethh);
+	if (eth_type < 0) {
+		action = XDP_ABORTED;
+		goto OUT;
+	}
+	bpf_printk("parsed ethhdr");
+
+	if (eth_type == bpf_htons(ETH_P_IP)) {
+		ip_type = parse_iphdr(&nh, data_end, &iph);
+	} else {
+		goto OUT;
+	}
+	bpf_printk("parsed iphdr");
+	
+	if (ip_type != IPPROTO_UDP) {
+		goto OUT;
+	}
+	bpf_printk("checked if UDP");
+
+	if (parse_udphdr(&nh, data_end, &udph) < 0) {
+		//action = XDP_DROP;
+		goto OUT;
+	}
+	bpf_printk("parsed UDP header");
+
+	if (bpf_ntohs(udph->dest) == 4172) {
+		bpf_printk("DST is 4172");
+		udph->dest = bpf_htons(bpf_ntohs(udph->dest)+1);
+
+		/* Do we know where to redirect this packet? */
+		dst = bpf_map_lookup_elem(&redirect_params, ethh->h_source);
+		if (!dst)
+			goto OUT;
+
+		/* Set a proper destination address */
+		memcpy(ethh->h_dest, dst, ETH_ALEN);
+		action = bpf_redirect_map(&tx_port, 0, 0);
+
+		bpf_printk("destionation udp pot after is %u", bpf_ntohs(udph->dest));
+		iph->check = ip_checksum((__u16 *)iph, sizeof(struct iphdr));
+		udph->check = udp_checksum(iph, udph, data_end);
+	}
+OUT:
 	return action;
 }
 

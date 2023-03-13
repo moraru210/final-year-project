@@ -98,7 +98,6 @@ int  xdp_prog_simple(struct xdp_md *ctx)
 		iph->check = 0;
 		iph->check = ~csum_reduce_helper(bpf_csum_diff(0, 0, (__be32 *)iph, size, 0));
 
-		//TODO:
 		udph->check = 0;
 		udph->check = l4_checksum(iph, udph, data_end);
 
@@ -168,7 +167,6 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		iph->check = 0;
 		iph->check = ~csum_reduce_helper(bpf_csum_diff(0, 0, (__be32 *)iph, sizeof(struct iphdr), 0));
 
-		//TODO: fix tcp checksum
 		tcph->check = 0;
 		tcph->check = l4_checksum(iph, tcph, data_end);
 

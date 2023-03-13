@@ -147,17 +147,14 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	}
 	bpf_printk("parsed TCP header");
 
-	if (bpf_ntohs(tcph->dest) == 4172 || bpf_ntohs(tcph->dest) == 4173) {
+	if (bpf_ntohs(tcph->dest) == 4172 || bpf_ntohs(tcph->source) == 4173) {
 		if (bpf_ntohs(tcph->dest) == 4172) {
 
 			bpf_printk("DST will be 4173");
 			tcph->dest = bpf_htons(bpf_ntohs(tcph->dest)+1);
 
-		} else if (bpf_ntohs(tcph->dest) == 4173) {
-
-			bpf_printk("DST will be 4173");
-			tcph->dest = bpf_htons(bpf_ntohs(tcph->dest)-1);
-
+		} else if (bpf_ntohs(tcph->source) == 4173) {
+			tcph->source = bpf_htons(4172);
 		}
 
 		swap_src_dst_ipv4(iph);

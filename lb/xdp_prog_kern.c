@@ -85,11 +85,11 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 	if (bpf_ntohs(tcph->dest) == 4172 || bpf_ntohs(tcph->source) == 4173) {
 		if (bpf_ntohs(tcph->dest) == 4172) {
-
-			bpf_printk("DST will be 4173");
-			tcph->dest = bpf_htons(bpf_ntohs(tcph->dest)+1);
-
-		} else if (bpf_ntohs(tcph->source) == 4173) {
+			__u32 idx = bpf_get_prandom_u32();
+			unsigned short mod = (idx % 2); 
+			
+			tcph->dest = bpf_htons(4173 + mod);
+		} else if (bpf_ntohs(tcph->source) == 4173 || bpf_ntohs(tcph->source) == 4174) {
 			tcph->source = bpf_htons(4172);
 		}
 

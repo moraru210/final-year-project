@@ -137,16 +137,6 @@ int main(int argc, char **argv)
 		return EXIT_FAIL_OPTION;
 	}
 
-	if (parse_mac(cfg.src_mac, src) < 0) {
-		fprintf(stderr, "ERR: can't parse mac address %s\n", cfg.src_mac);
-		return EXIT_FAIL_OPTION;
-	}
-
-	if (parse_mac(cfg.dest_mac, dest) < 0) {
-		fprintf(stderr, "ERR: can't parse mac address %s\n", cfg.dest_mac);
-		return EXIT_FAIL_OPTION;
-	}
-
 	/* Open the tx_port map corresponding to the cfg.ifname interface */
 	map_fd = open_bpf_map_file(pin_dir, "ports_map", NULL);
 	if (map_fd < 0) {
@@ -161,21 +151,21 @@ int main(int argc, char **argv)
 	int target_port_two = 4174;
 	if (bpf_map_update_elem(map_fd, &origin_port, &zero, 0) < 0) {
 		fprintf(stderr,
-				"WARN: Failed to update bpf map file: err(%d):%s\n",
+				"WARN: Failed to update bpf map file 1: err(%d):%s\n",
 				errno, strerror(errno));
 		return -1;
 	}
 
 	if (bpf_map_update_elem(map_fd, &target_port_one, &zero, 0) < 0) {
 		fprintf(stderr,
-				"WARN: Failed to update bpf map file: err(%d):%s\n",
+				"WARN: Failed to update bpf map file 2: err(%d):%s\n",
 				errno, strerror(errno));
 		return -1;
 	}
 
 	if (bpf_map_update_elem(map_fd, &target_port_two, &zero, 0) < 0) {
 		fprintf(stderr,
-				"WARN: Failed to update bpf map file: err(%d):%s\n",
+				"WARN: Failed to update bpf map file 3: err(%d):%s\n",
 				errno, strerror(errno));
 		return -1;
 	}

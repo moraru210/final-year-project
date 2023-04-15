@@ -27,6 +27,8 @@ static const char *__doc__ = "XDP redirect helper\n"
 
 #include "../common/xdp_stats_kern_user.h"
 
+#include "./common.h"
+
 static const struct option_wrapper long_options[] = {
 
 	{{"help",        no_argument,		NULL, 'h' },
@@ -138,7 +140,7 @@ int main(int argc, char **argv)
 	}
 
 	/* Open the tx_port map corresponding to the cfg.ifname interface */
-	map_fd = open_bpf_map_file(pin_dir, "ports_map", NULL);
+	map_fd = open_bpf_map_file(pin_dir, "seq_map", NULL);
 	if (map_fd < 0) {
 		return EXIT_FAIL_BPF;
 	}
@@ -146,48 +148,34 @@ int main(int argc, char **argv)
 	printf("map dir: %s\n", pin_dir);
 
 	int zero = 0;
-	int origin_port = 4172;
-	int target_port_one = 4173;
-	int target_port_two = 4174;
-	if (bpf_map_update_elem(map_fd, &origin_port, &zero, 0) < 0) {
-		fprintf(stderr,
-				"WARN: Failed to update bpf map file 1: err(%d):%s\n",
-				errno, strerror(errno));
-		return -1;
+	int target_port_one = 4172;
+	int target_port_two = 4173;
+
+	struct connection conn1;
+	conn1.dst_port = 4172;
+	conn1.src_port = 51702;
+
+	unsigned int val1;
+
+	int err = bpf_map_lookup_elem(map_fd, &conn1, &val1);
+	if (err < 0) {
+		return EXIT_FAIL_BPF;
+	} else {
+		printf("conn1 val:%d\n", val1);
 	}
 
-	if (bpf_map_update_elem(map_fd, &target_port_one, &zero, 0) < 0) {
-		fprintf(stderr,
-				"WARN: Failed to update bpf map file 2: err(%d):%s\n",
-				errno, strerror(errno));
-		return -1;
+	struct connection conn2;
+	conn2.dst_port = 4173;
+	conn2.src_port = 51702;
+
+	unsigned int val2;
+
+	err = bpf_map_lookup_elem(map_fd, &conn2, &val2);
+	if (err < 0) {
+		return EXIT_FAIL_BPF;
+	} else {
+		printf("conn1 val:%d\n", val1);
 	}
-
-	if (bpf_map_update_elem(map_fd, &target_port_two, &zero, 0) < 0) {
-		fprintf(stderr,
-				"WARN: Failed to update bpf map file 3: err(%d):%s\n",
-				errno, strerror(errno));
-		return -1;
-	}
-
-	// if (redirect_map) {
-	// 	/* setup a virtual port for the static redirect */
-	// 	i = 0;
-	// 	bpf_map_update_elem(map_fd, &i, &cfg.redirect_ifindex, 0);
-	// 	printf("redirect from ifnum=%d to ifnum=%d\n", cfg.ifindex, cfg.redirect_ifindex);
-
-	// 	/* Open the redirect_params map */
-	// 	map_fd = open_bpf_map_file(pin_dir, "redirect_params", NULL);
-	// 	if (map_fd < 0) {
-	// 		return EXIT_FAIL_BPF;
-	// 	}
-
-	// 	/* Setup the mapping containing MAC addresses */
-	// 	if (write_iface_params(map_fd, src, dest) < 0) {
-	// 		fprintf(stderr, "can't write iface params\n");
-	// 		return 1;
-	// 	}
-	// }
 
 	return EXIT_OK;
 }

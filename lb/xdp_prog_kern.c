@@ -5,24 +5,18 @@
 
 #include "../common/parsing_helpers.h"
 #include "../common/rewrite_helpers.h"
-
-struct bpf_map_def SEC("maps") ports_map = {
-	.type        = BPF_MAP_TYPE_HASH,
-	.key_size    = sizeof(unsigned int),
-	.value_size  = sizeof(unsigned int),
-	.max_entries = 6,
-};
+#include "./common.h"
 
 struct bpf_map_def SEC("maps") seq_map = {
 	.type        = BPF_MAP_TYPE_HASH,
-	.key_size    = sizeof(unsigned int),
+	.key_size    = sizeof(struct connection),
 	.value_size  = sizeof(unsigned int),
 	.max_entries = 6,
 };
 
 struct bpf_map_def SEC("maps") ack_map = {
 	.type        = BPF_MAP_TYPE_HASH,
-	.key_size    = sizeof(unsigned int),
+	.key_size    = sizeof(struct connection),
 	.value_size  = sizeof(unsigned int),
 	.max_entries = 6,
 };
@@ -78,8 +72,6 @@ static inline __u16 l4_checksum(struct iphdr *iph, void *l4, void *data_end)
 SEC("xdp_tcp")
 int  xdp_prog_tcp(struct xdp_md *ctx)
 {
-	// int offset = 0;
-
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
 	struct ethhdr *ethh;
@@ -88,6 +80,8 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	__u32 action = XDP_DROP; /* Default action */
 	struct hdr_cursor nh;
 	int eth_type, ip_type;
+
+	struct connection conn;
 
 	nh.pos = data;
 
@@ -116,86 +110,28 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	}
 	bpf_printk("parsed TCP header");
 
-	if (bpf_ntohs(tcph->dest) == 4172 || bpf_ntohs(tcph->dest) == 4173 || bpf_ntohs(tcph->source) == 4173 || bpf_ntohs(tcph->source) == 4174) {
-		if (bpf_ntohs(tcph->dest) == 4172) {
+	conn.src_port = bpf_ntohs(tcph->source);
+	conn.dst_port = bpf_ntohs(tcph->dest);
 
-			unsigned int new_dest = 4173;
-			unsigned int *res = bpf_map_lookup_elem(&ports_map, &new_dest);
-			if (!res) {
-				action = XDP_ABORTED;
-				goto OUT;
-			}
+	if (conn.dst_port == 4172 || conn.dst_port == 4173 || conn.src_port == 4172 || conn.src_port == 4173) {
+		
+		if (tcph->ack && !((tcph->psh) || (tcph->syn))) {
+			unsigned int seq_no = bpf_ntohs(tcph->seq);
+			unsigned int ack_no = bpf_ntohs(tcph->ack);
 
-			unsigned int next_dest = 4174;
-			unsigned int *next_port_seq = bpf_map_lookup_elem(&seq_map, &next_dest);
-			if (!next_port_seq) {
-				action = XDP_ABORTED;
-				goto OUT;
-			}
-
-			unsigned int *next_port_ack = bpf_map_lookup_elem(&ack_map, &next_dest);
-			if (!next_port_ack) {
-				action = XDP_ABORTED;
-				goto OUT;
-			}		
-
-			unsigned int seq_no = tcph->seq;
-			unsigned int ack_seq_no = tcph->ack_seq;
-			if (*res == 2) {
-				new_dest = next_dest;
-				seq_no = *next_port_seq;
-				ack_seq_no = *next_port_ack;
-			}
-			__sync_fetch_and_add(res, 1);
-
-			// if (new_dest != current) {
-			// 	offset = get_offset(&seq_no, &new_dest);
-			// 	current = new_dest;
-			// }
+			struct connection query_conn;
+			query_conn.src_port = conn.dst_port;
+			query_conn.dst_port = conn.src_port;
 			
-			tcph->dest = bpf_htons(new_dest);
-			tcph->seq = seq_no;
-			tcph->ack = ack_seq_no;
-
-		} else if (bpf_ntohs(tcph->dest) == 4173) {
-			unsigned int new_dest = 4174;
-			tcph->dest = bpf_htons(4174);
-
-			unsigned int seq_no = tcph->seq;
-			unsigned int ack_seq_no = tcph->ack_seq;
-
-			if (bpf_map_update_elem(&seq_map, &new_dest, &seq_no, 0) < 0) {
+			if (bpf_map_update_elem(&seq_map, &query_conn, &seq_no, 0) < 0) {
 				action = XDP_ABORTED;
 				goto OUT;
 			}
 
-			if (bpf_map_update_elem(&ack_map, &new_dest, &ack_seq_no, 0) < 0) {
+			if (bpf_map_update_elem(&ack_map, &query_conn, &ack_no, 0) < 0) {
 				action = XDP_ABORTED;
 				goto OUT;
 			}
-
-		} else if (bpf_ntohs(tcph->source) == 4173) {
-			
-			// int target_port = bpf_ntohs(tcph->source);
-			unsigned int ack_seq = tcph->ack_seq;
-			// if (target_port != current) {
-			// 	action = XDP_ABORTED;
-			// 	goto OUT;
-			// }
-
-			tcph->source = bpf_htons(4172);
-			tcph->ack_seq = ack_seq;
-
-		} else if (bpf_ntohs(tcph->source) == 4174) {
-			// int target_port = bpf_ntohs(tcph->source);
-			unsigned int ack_seq = tcph->ack_seq;
-			// if (target_port != current) {
-			// 	action = XDP_ABORTED;
-			// 	goto OUT;
-			// }
-
-			tcph->source = bpf_htons(4173);
-			tcph->ack_seq = ack_seq;
 		}
 
 		swap_src_dst_ipv4(iph);

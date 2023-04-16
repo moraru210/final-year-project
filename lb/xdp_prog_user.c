@@ -16,6 +16,7 @@ static const char *__doc__ = "XDP redirect helper\n"
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
+#include <bpf/bpf_endian.h>
 
 #include <net/if.h>
 #include <linux/if_ether.h>
@@ -140,42 +141,39 @@ int main(int argc, char **argv)
 	}
 
 	/* Open the tx_port map corresponding to the cfg.ifname interface */
-	map_fd = open_bpf_map_file(pin_dir, "seq_map", NULL);
+	map_fd = open_bpf_map_file(pin_dir, "ack_map", NULL);
 	if (map_fd < 0) {
 		return EXIT_FAIL_BPF;
 	}
 
 	printf("map dir: %s\n", pin_dir);
 
-	int zero = 0;
-	int target_port_one = 4172;
-	int target_port_two = 4173;
-
 	struct connection conn1;
-	conn1.dst_port = 4172;
-	conn1.src_port = 51702;
+	conn1.dst_port = 42958;
+	conn1.src_port = 4172;
 
 	unsigned int val1;
 
 	int err = bpf_map_lookup_elem(map_fd, &conn1, &val1);
 	if (err < 0) {
+		printf("failed finding ack number");
 		return EXIT_FAIL_BPF;
 	} else {
-		printf("conn1 val:%d\n", val1);
+		printf("conn1 ack val: %d\n", val1);
 	}
 
-	struct connection conn2;
-	conn2.dst_port = 4173;
-	conn2.src_port = 51702;
+	// struct connection conn2;
+	// conn2.dst_port = 4173;
+	// conn2.src_port = 51702;
 
-	unsigned int val2;
+	// unsigned int val2;
 
-	err = bpf_map_lookup_elem(map_fd, &conn2, &val2);
-	if (err < 0) {
-		return EXIT_FAIL_BPF;
-	} else {
-		printf("conn1 val:%d\n", val1);
-	}
+	// err = bpf_map_lookup_elem(map_fd, &conn2, &val2);
+	// if (err < 0) {
+	// 	return EXIT_FAIL_BPF;
+	// } else {
+	// 	printf("conn1 val:%d\n", val1);
+	// }
 
 	return EXIT_OK;
 }

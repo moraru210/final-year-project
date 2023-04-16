@@ -11,14 +11,14 @@ struct bpf_map_def SEC("maps") seq_map = {
 	.type        = BPF_MAP_TYPE_HASH,
 	.key_size    = sizeof(struct connection),
 	.value_size  = sizeof(unsigned int),
-	.max_entries = 6,
+	.max_entries = 18,
 };
 
 struct bpf_map_def SEC("maps") ack_map = {
 	.type        = BPF_MAP_TYPE_HASH,
 	.key_size    = sizeof(struct connection),
 	.value_size  = sizeof(unsigned int),
-	.max_entries = 6,
+	.max_entries = 18,
 };
 
 static __always_inline __u16 csum_reduce_helper(__u32 csum)
@@ -114,24 +114,31 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	conn.dst_port = bpf_ntohs(tcph->dest);
 
 	if (conn.dst_port == 4172 || conn.dst_port == 4173 || conn.src_port == 4172 || conn.src_port == 4173) {
-		
-		if (tcph->ack && !((tcph->psh) || (tcph->syn))) {
+		if (tcph->ack) {
+			bpf_printk("ack packet for dst %d, src %d", conn.dst_port, conn.src_port);
+			
 			unsigned int seq_no = bpf_ntohs(tcph->seq);
-			unsigned int ack_no = bpf_ntohs(tcph->ack);
+			bpf_printk("ack pack seq_no: %d, after endian conversion is: %d", tcph->seq, seq_no);
+			unsigned int ack_no = bpf_ntohs(tcph->ack_seq);
+			bpf_printk("ack packet ack_seq_no: %d, after endian conversion is: %d", tcph->ack_seq, ack_no);
 
 			struct connection query_conn;
-			query_conn.src_port = conn.dst_port;
-			query_conn.dst_port = conn.src_port;
+			query_conn.src_port = conn.src_port;
+			query_conn.dst_port = conn.dst_port;
 			
+			bpf_printk("before updating seq map");
 			if (bpf_map_update_elem(&seq_map, &query_conn, &seq_no, 0) < 0) {
 				action = XDP_ABORTED;
 				goto OUT;
 			}
+			bpf_printk("updated seq map");
 
+			bpf_printk("before updating ack map");
 			if (bpf_map_update_elem(&ack_map, &query_conn, &ack_no, 0) < 0) {
 				action = XDP_ABORTED;
 				goto OUT;
 			}
+			bpf_printk("updated ack map");
 		}
 
 		swap_src_dst_ipv4(iph);

@@ -171,55 +171,5 @@ int main(int argc, char **argv)
 		printf("client port: %u\n", result_port);
 	}
 
-	/****************************************************/
-	// map_fd = open_bpf_map_file(pin_dir, "ack_map", NULL);
-	// if (map_fd < 0) {
-	// 	return EXIT_FAIL_BPF;
-	// }
-
-	// struct connection conn1;
-	// conn1.dst_port = 59668;
-	// conn1.src_port = 4172;
-
-	// unsigned int val1;
-
-	// err = bpf_map_lookup_elem(map_fd, &conn1, &val1);
-	// if (err < 0) {
-	// 	printf("failed finding ack number");
-	// 	return EXIT_FAIL_BPF;
-	// } else {
-	// 	printf("conn1 ack val: %u\n", val1);
-	// }
-
-	// struct connection conn2;
-	// conn2.dst_port = 56412;
-	// conn2.src_port = 4173;
-
-	// unsigned int val2;
-
-	// err = bpf_map_lookup_elem(map_fd, &conn2, &val2);
-	// if (err < 0) {
-	// 	printf("failed finding ack number");
-	// 	return EXIT_FAIL_BPF;
-	// } else {
-	// 	printf("conn1 ack val: %u\n", val2);
-	// }
-	/****************************************************/
-
-	// map_fd = open_bpf_map_file(pin_dir, "seq_offsets", NULL);
-	// if (map_fd < 0) {
-	// 	return EXIT_FAIL_BPF;
-	// }
-
-	// struct offset_key query_offset;
-	// query_offset.new_port = 4172;
-	// query_offset.original_port = 4173;
-	// err = bpf_map_delete_elem(map_fd, &query_offset);
-	// if (err < 0) {
-	// 	printf("failed to delete offset_key from map\n");
-	// } else {
-	// 	printf("successfully deleted offset_key form map\n");
-	// }
-
 	return EXIT_OK;
 }

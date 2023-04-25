@@ -151,8 +151,19 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				action = XDP_ABORTED;
 				goto OUT;
 			}
+			bpf_printk("init ports map");
 
-			bpf_printk("updated ports map");
+			if (bpf_map_update_elem(&seq_offsets, &conn, 0, 0) < 0) {
+				action = XDP_ABORTED;
+				goto OUT;
+			}
+			bpf_printk("init seq offsets map");
+
+			if (bpf_map_update_elem(&ack_offsets, &conn, 0, 0) < 0) {
+				action = XDP_ABORTED;
+				goto OUT;
+			}
+			bpf_printk("init ack offsets map");			
 
 		} else if (tcph->psh) {
 			struct connection client_conn;
@@ -227,7 +238,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			unsigned int new_ack_no = ack_no + *seq_off;
 			bpf_printk("new ack_seq no is %u", new_ack_no);
 
-			tcph->source = bpf_htons(4173);
+			tcph->source = bpf_htons(4170);
 			tcph->dest = bpf_htons(client_conn.src_port);
 			tcph->seq = bpf_htonl(new_seq_no);
 			tcph->ack_seq = bpf_htonl(new_ack_no);

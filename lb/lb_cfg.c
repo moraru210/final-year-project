@@ -112,7 +112,9 @@ int main(int argc, char **argv)
 {
 	int i;
 	int len;
-	int map_fd;
+	int ports_map_fd;
+	int seq_map_fd;
+	int ack_map_fd;
 	bool redirect_map;
 	char pin_dir[PATH_MAX];
 	unsigned char src[ETH_ALEN];
@@ -142,33 +144,133 @@ int main(int argc, char **argv)
 
 	printf("map dir: %s\n", pin_dir);
 
-	/* Open the tx_port map corresponding to the cfg.ifname interface */
 	/****************************************************/
-	map_fd = open_bpf_map_file(pin_dir, "ports_map", NULL);
-	if (map_fd < 0) {
+	ports_map_fd = open_bpf_map_file(pin_dir, "ports_map", NULL);
+	if (ports_map_fd < 0) {
 		return EXIT_FAIL_BPF;
 	}
 
-	unsigned int query_port = 4172;
-	unsigned int result_port;
+	struct connection query_conn1;
+	query_conn1.src_port = 4070; 
+	query_conn1.dst_port = 4072; //TODO: make this configurable
 
-	int err = bpf_map_lookup_elem(map_fd, &query_port, &result_port);
+	struct connection query_conn2;
+	query_conn2.src_port = 4070;
+	query_conn2.dst_port = 4073; //TODO: make this configurable
+
+	struct connection client_conn1;
+	struct connection client_conn2;
+
+	int err = bpf_map_lookup_elem(ports_map_fd, &query_conn1, &client_conn1);
 	if (err < 0) {
-		printf("failed finding port number");
+		printf("failed finding client connection");
 		return EXIT_FAIL_BPF;
 	} else {
-		printf("client port: %u\n", result_port);
+		printf("client connection found with src port %u", client_conn1.src_port);
 	}
 
-	query_port = 4173;
-	result_port;
-
-	err = bpf_map_lookup_elem(map_fd, &query_port, &result_port);
+	err = bpf_map_lookup_elem(ports_map_fd, &query_conn2, &client_conn2);
 	if (err < 0) {
-		printf("failed finding port number");
+		printf("failed finding client connection");
 		return EXIT_FAIL_BPF;
 	} else {
-		printf("client port: %u\n", result_port);
+		printf("client connection found with src port %u", client_conn2.src_port);
+	}
+	/****************************************************/
+
+	seq_map_fd = open_bpf_map_file(pin_dir, "seq_map", NULL);
+	if (seq_map_fd < 0) {
+		return EXIT_FAIL_BPF;
+	}
+
+	ack_map_fd = open_bpf_map_file(pin_dir, "ack_map", NULL);
+	if (ack_map_fd < 0) {
+		return EXIT_FAIL_BPF;
+	}
+
+	unsigned int c1_seq;
+	err = bpf_map_lookup_elem(seq_map_fd, &client_conn1, &c1_seq);
+	if (err < 0) {
+		printf("failed finding client connection1 seq no");
+		return EXIT_FAIL_BPF;
+	} else {
+		printf("client connection1 found seq no %u", c1_seq);
+	}
+
+	unsigned int c1_ack;
+	err = bpf_map_lookup_elem(ack_map_fd, &client_conn1, &c1_ack);
+	if (err < 0) {
+		printf("failed finding client connection1 ack no");
+		return EXIT_FAIL_BPF;
+	} else {
+		printf("client connection1 found ack no %u", c1_ack);
+	}
+
+	unsigned int c2_seq;
+	err = bpf_map_lookup_elem(seq_map_fd, &client_conn2, &c2_seq);
+	if (err < 0) {
+		printf("failed finding client connection2 seq no");
+		return EXIT_FAIL_BPF;
+	} else {
+		printf("client connection2 found seq no %u", c2_seq);
+	}
+
+	unsigned int c2_ack;
+	err = bpf_map_lookup_elem(ack_map_fd, &client_conn2, &c2_ack);
+	if (err < 0) {
+		printf("failed finding client connection2 ack no");
+		return EXIT_FAIL_BPF;
+	} else {
+		printf("client connection2 found ack no %u", c2_ack);
+	}
+
+	signed int c1_seq_off = c1_seq - c2_seq;
+	printf("conn1 seq no offset is %d", c1_seq_off);
+	signed int c1_ack_off = c1_ack - c2_ack;
+	printf("conn1 ack no offset is %d", c1_ack_off);
+
+	signed int c2_seq_off = c2_seq - c1_seq;
+	printf("conn2 seq no offset is %d", c2_seq_off);
+	signed int c2_ack_off = c2_ack - c1_ack;
+	printf("conn2 ack no offset is %d", c2_ack_off);
+
+	/****************************************************/
+	int seq_off_map_fd = open_bpf_map_file(pin_dir, "seq_offsets", NULL);
+	if (seq_off_map_fd < 0) {
+		return EXIT_FAIL_BPF;
+	}
+
+	int ack_off_map_fd = open_bpf_map_file(pin_dir, "ack_offsets", NULL);
+	if (ack_off_map_fd < 0) {
+		return EXIT_FAIL_BPF;
+	}
+
+	err = bpf_map_update_elem(seq_off_map_fd, &client_conn1, &c1_seq_off, 0);
+	if (err < 0) {
+		printf("failed to update seq offset maps for client conn1");
+	} else {
+		printf("updated seq offset maps for client conn1");
+	}
+
+	err = bpf_map_update_elem(ack_off_map_fd, &client_conn1, &c1_ack_off, 0);
+	if (err < 0) {
+		printf("failed to update ack offset maps for client conn1");
+	} else {
+		printf("updated ack offset maps for client conn1");
+	}
+
+	err = bpf_map_update_elem(seq_off_map_fd, &client_conn2, &c2_seq_off, 0);
+	if (err < 0) {
+		printf("failed to update seq offset maps for client conn2");
+	} else {
+		printf("updated seq offset maps for client conn2");
+	}
+
+	err = bpf_map_update_elem(ack_off_map_fd, &client_conn2, &c2_ack_off, 0);
+	if (err < 0) {
+		printf("failed to update ack offset maps for client conn2");
+	} else {
+		printf("updated ack offset maps for client conn2");
 	}
 
 	return EXIT_OK;

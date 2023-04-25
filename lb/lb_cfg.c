@@ -152,11 +152,11 @@ int main(int argc, char **argv)
 
 	struct connection query_conn1;
 	query_conn1.src_port = 4070; 
-	query_conn1.dst_port = 4072; //TODO: make this configurable
+	query_conn1.dst_port = 4071; //TODO: make this configurable
 
 	struct connection query_conn2;
 	query_conn2.src_port = 4070;
-	query_conn2.dst_port = 4073; //TODO: make this configurable
+	query_conn2.dst_port = 4072; //TODO: make this configurable
 
 	struct connection client_conn1;
 	struct connection client_conn2;
@@ -235,43 +235,43 @@ int main(int argc, char **argv)
 	printf("conn2 ack no offset is %d", c2_ack_off);
 
 	/****************************************************/
-	int seq_off_map_fd = open_bpf_map_file(pin_dir, "seq_offsets", NULL);
-	if (seq_off_map_fd < 0) {
-		return EXIT_FAIL_BPF;
-	}
+	// int seq_off_map_fd = open_bpf_map_file(pin_dir, "seq_offsets", NULL);
+	// if (seq_off_map_fd < 0) {
+	// 	return EXIT_FAIL_BPF;
+	// }
 
-	int ack_off_map_fd = open_bpf_map_file(pin_dir, "ack_offsets", NULL);
-	if (ack_off_map_fd < 0) {
-		return EXIT_FAIL_BPF;
-	}
+	// int ack_off_map_fd = open_bpf_map_file(pin_dir, "ack_offsets", NULL);
+	// if (ack_off_map_fd < 0) {
+	// 	return EXIT_FAIL_BPF;
+	// }
 
-	err = bpf_map_update_elem(seq_off_map_fd, &client_conn1, &c1_seq_off, 0);
-	if (err < 0) {
-		printf("failed to update seq offset maps for client conn1");
-	} else {
-		printf("updated seq offset maps for client conn1");
-	}
+	// err = bpf_map_update_elem(seq_off_map_fd, &client_conn1, &c1_seq_off, 0);
+	// if (err < 0) {
+	// 	printf("failed to update seq offset maps for client conn1");
+	// } else {
+	// 	printf("updated seq offset maps for client conn1");
+	// }
 
-	err = bpf_map_update_elem(ack_off_map_fd, &client_conn1, &c1_ack_off, 0);
-	if (err < 0) {
-		printf("failed to update ack offset maps for client conn1");
-	} else {
-		printf("updated ack offset maps for client conn1");
-	}
+	// err = bpf_map_update_elem(ack_off_map_fd, &client_conn1, &c1_ack_off, 0);
+	// if (err < 0) {
+	// 	printf("failed to update ack offset maps for client conn1");
+	// } else {
+	// 	printf("updated ack offset maps for client conn1");
+	// }
 
-	err = bpf_map_update_elem(seq_off_map_fd, &client_conn2, &c2_seq_off, 0);
-	if (err < 0) {
-		printf("failed to update seq offset maps for client conn2");
-	} else {
-		printf("updated seq offset maps for client conn2");
-	}
+	// err = bpf_map_update_elem(seq_off_map_fd, &client_conn2, &c2_seq_off, 0);
+	// if (err < 0) {
+	// 	printf("failed to update seq offset maps for client conn2");
+	// } else {
+	// 	printf("updated seq offset maps for client conn2");
+	// }
 
-	err = bpf_map_update_elem(ack_off_map_fd, &client_conn2, &c2_ack_off, 0);
-	if (err < 0) {
-		printf("failed to update ack offset maps for client conn2");
-	} else {
-		printf("updated ack offset maps for client conn2");
-	}
+	// err = bpf_map_update_elem(ack_off_map_fd, &client_conn2, &c2_ack_off, 0);
+	// if (err < 0) {
+	// 	printf("failed to update ack offset maps for client conn2");
+	// } else {
+	// 	printf("updated ack offset maps for client conn2");
+	// }
 
 	return EXIT_OK;
 }

@@ -9,6 +9,9 @@ import (
 )
 
 func main() {
+    //set up connection with worker nodes
+    setUpWorkerConnections()
+
     // Listen for incoming connections
     ln, err := net.Listen("tcp", ":8080")
     if err != nil {
@@ -30,6 +33,48 @@ func main() {
         // Handle new connection in a goroutine
         go handleConnection(conn)
     }
+}
+
+func setUpWorkerConnections() {
+    // Connect to netcat server at localhost:4170
+    conn1, err := net.Dial("tcp", "localhost:4170")
+    if err != nil {
+        fmt.Println("Error connecting to localhost:4170:", err)
+        return
+    }
+    defer conn1.Close()
+
+    fmt.Println("Connected to localhost:4170")
+
+    // Connect to netcat server at localhost:4171
+    conn2, err := net.Dial("tcp", "localhost:4171")
+    if err != nil {
+        fmt.Println("Error connecting to localhost:4171:", err)
+        return
+    }
+    defer conn2.Close()
+
+    fmt.Println("Connected to localhost:4171")
+
+    // Send messages to the netcat servers
+    message1 := "Hello from connection 1\n"
+    message2 := "Hello from connection 2\n"
+
+    _, err = conn1.Write([]byte(message1))
+    if err != nil {
+        fmt.Println("Error sending message to localhost:4170:", err)
+        return
+    }
+
+    fmt.Println("Sent message to localhost:4170")
+
+    _, err = conn2.Write([]byte(message2))
+    if err != nil {
+        fmt.Println("Error sending message to localhost:4171:", err)
+        return
+    }
+
+    fmt.Println("Sent message to localhost:4171")
 }
 
 func handleConnection(conn net.Conn) {

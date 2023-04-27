@@ -6,33 +6,35 @@ import (
 )
 
 func main() {
-    port := ":8080"
-
-    // Listen for incoming client connections
-    listener, err := net.Listen("tcp", port)
+    // Listen for incoming connections
+    ln, err := net.Listen("tcp", ":8080")
     if err != nil {
         fmt.Println("Error listening:", err.Error())
         return
     }
-    defer listener.Close()
+    defer ln.Close()
 
-    fmt.Println("Listening on", port)
+    fmt.Println("Server listening on port 8080")
 
-    // Accept incoming connections from clients
     for {
-        conn, err := listener.Accept()
+        // Accept new connection
+        conn, err := ln.Accept()
         if err != nil {
-            fmt.Println("Error accepting connection:", err.Error())
-            return
+            fmt.Println("Error accepting:", err.Error())
+            continue
         }
 
-        // Handle client connection in a separate goroutine
+        // Handle new connection in a goroutine
         go handleConnection(conn)
     }
 }
 
 func handleConnection(conn net.Conn) {
     defer conn.Close()
+
+    // Get the client's IP address and port number
+    remoteAddr := conn.RemoteAddr()
+    fmt.Println("Client connected from", remoteAddr.String())
 
     // Receive messages from the client
     buffer := make([]byte, 1024)

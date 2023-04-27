@@ -22,6 +22,8 @@ func main() {
 
     fmt.Println("Server listening on port 8080")
 
+    const num_workers = 2;
+    rr := 0
     for {
         // Accept new connection
         conn, err := ln.Accept()
@@ -35,14 +37,13 @@ func main() {
     }
 }
 
-func setUpWorkerConnections() {
+func setUpWorkerConnections() (net.Conn, net.Conn) {
     // Connect to netcat server at localhost:4170
     conn1, err := net.Dial("tcp", "localhost:4170")
     if err != nil {
         fmt.Println("Error connecting to localhost:4170:", err)
-        return
+        return nil, nil
     }
-    defer conn1.Close()
 
     fmt.Println("Connected to localhost:4170")
 
@@ -50,9 +51,8 @@ func setUpWorkerConnections() {
     conn2, err := net.Dial("tcp", "localhost:4171")
     if err != nil {
         fmt.Println("Error connecting to localhost:4171:", err)
-        return
+        return nil, nil
     }
-    defer conn2.Close()
 
     fmt.Println("Connected to localhost:4171")
 
@@ -63,7 +63,7 @@ func setUpWorkerConnections() {
     _, err = conn1.Write([]byte(message1))
     if err != nil {
         fmt.Println("Error sending message to localhost:4170:", err)
-        return
+        return nil, nil
     }
 
     fmt.Println("Sent message to localhost:4170")
@@ -71,10 +71,11 @@ func setUpWorkerConnections() {
     _, err = conn2.Write([]byte(message2))
     if err != nil {
         fmt.Println("Error sending message to localhost:4171:", err)
-        return
+        return nil, nil
     }
 
     fmt.Println("Sent message to localhost:4171")
+    return conn1, conn2
 }
 
 func handleConnection(conn net.Conn) {

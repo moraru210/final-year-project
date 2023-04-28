@@ -6,35 +6,77 @@ import "C"
 import (
     "fmt"
     "net"
+    "github.com/cilium/cilium/pkg/bpf"
+    "unsafe"
 )
 
 func main() {
-    //set up connection with worker nodes
-    setUpWorkerConnections()
 
-    // Listen for incoming connections
-    ln, err := net.Listen("tcp", ":8080")
-    if err != nil {
-        fmt.Println("Error listening:", err.Error())
+    connection_map_path := "/sys/fs/bpf/test/ports_map"
+    conn_map_fd, err := bpf.ObjGet(connection_map_path)
+    if (err != nil) {
+        fmt.Println("Error finding map object: ", err.Error())
         return
     }
-    defer ln.Close()
+    fmt.Println("complete finding map")
 
-    fmt.Println("Server listening on port 8080")
-
-    const num_workers = 2;
-    rr := 0
-    for {
-        // Accept new connection
-        conn, err := ln.Accept()
-        if err != nil {
-            fmt.Println("Error accepting:", err.Error())
-            continue
-        }
-
-        // Handle new connection in a goroutine
-        go handleConnection(conn)
+    client_conn1 := C.struct_connection{
+        src_port: 4000,
+        dst_port: 8080,
     }
+
+    worker_conn1 := C.struct_connection{
+        src_port: 8080,
+        dst_port: 4171,
+    }
+
+
+    err = bpf.UpdateElement(conn_map_fd, "ports_map", unsafe.Pointer(&client_conn1), unsafe.Pointer(&worker_conn1), bpf.BPF_ANY)
+    if (err != nil) {
+        fmt.Println("Error in updating map: ", err.Error())
+        return
+    } 
+    fmt.Println("complete updating map")
+    
+    var worker_conn_val = &C.struct_connection{
+        src_port: 0,
+        dst_port: 0,
+    }
+    err = bpf.LookupElement(conn_map_fd, unsafe.Pointer(&client_conn1), unsafe.Pointer(worker_conn_val))
+    if (err != nil) {
+        fmt.Println("Error in lookup map: ", err.Error())
+        return
+    }
+    fmt.Println("complete lookup map")
+
+    fmt.Println("dst_port of worker conn is %d\n", worker_conn_val.dst_port)
+
+    //set up connection with worker nodes
+    // setUpWorkerConnections()
+
+    // // Listen for incoming connections
+    // ln, err := net.Listen("tcp", ":8080")
+    // if err != nil {
+    //     fmt.Println("Error listening:", err.Error())
+    //     return
+    // }
+    // defer ln.Close()
+
+    // fmt.Println("Server listening on port 8080")
+
+    // const num_workers = 2;
+    // rr := 0
+    // for {
+    //     // Accept new connection
+    //     conn, err := ln.Accept()
+    //     if err != nil {
+    //         fmt.Println("Error accepting:", err.Error())
+    //         continue
+    //     }
+
+    //     // Handle new connection in a goroutine
+    //     go handleConnection(conn)
+    // }
 }
 
 func setUpWorkerConnections() (net.Conn, net.Conn) {

@@ -10,14 +10,42 @@ import (
     "unsafe"
 )
 
+type maps_fd struct {
+    ports_map int
+    seq_offsets int
+    ack_offsets int
+}
+
 func main() {
     const connection_map_path = "/sys/fs/bpf/test/ports_map"
-    conn_map_fd, err := bpf.ObjGet(connection_map_path)
+    ports_map_fd, err := bpf.ObjGet(connection_map_path)
     if (err != nil) {
         fmt.Println("Error finding map object: ", err.Error())
         return
     }
-    fmt.Println("complete finding map")
+    fmt.Println("complete finding ports_map")
+
+    const seq_offsets_path = "/sys/fs/bpf/test/seq_offsets"
+    seq_offsets_fd, err := bpf.ObjGet(seq_offsets_path)
+    if (err != nil) {
+        fmt.Println("Error finding map object: ", err.Error())
+        return
+    }
+    fmt.Println("complete finding seq_offsets map")
+
+    const ack_offsets_path = "/sys/fs/bpf/test/ack_offsets"
+    ack_offsets_fd, err := bpf.ObjGet(ack_offsets_path)
+    if (err != nil) {
+        fmt.Println("Error finding map object: ", err.Error())
+        return
+    }
+    fmt.Println("complete finding ack_offsets map")
+
+    maps := maps_fd{
+        ports_map: ports_map_fd,
+        seq_offsets: seq_offsets_fd,
+        ack_offsets: ack_offsets_fd,
+    }
 
     //set up connection with worker nodes
     conn1, conn2, err := setUpWorkerConnections()
@@ -50,9 +78,9 @@ func main() {
 
         // Handle new connection in a goroutine
         if (rr % num_workers == 1) {
-            go handleConnection(conn, conn1, conn_map_fd)
+            go handleConnection(conn, conn1, maps)
         } else {
-            go handleConnection(conn, conn2, conn_map_fd)
+            go handleConnection(conn, conn2, maps)
         }
     }
 }
@@ -73,11 +101,11 @@ func setUpWorkerConnections() (net.Conn, net.Conn, error) {
         return nil, nil, err
     }
     fmt.Println("Connected to localhost:4171")
-    
+
     return conn1, conn2, nil
 }
 
-func handleConnection(conn net.Conn, conn_w net.Conn, conn_map_fd int) {
+func handleConnection(conn net.Conn, conn_w net.Conn, maps maps_fd) {
     defer conn.Close()
 
     // Get the client's IP address and port number
@@ -108,23 +136,52 @@ func handleConnection(conn net.Conn, conn_w net.Conn, conn_map_fd int) {
 
     fmt.Printf("Access worker connection struct dst_port %d\n", worker_c.dst_port);
 
-    // Update Ports Map with conn->conn_w and rev(conn_w)->rev(conn)
-    err := bpf.UpdateElement(conn_map_fd, "ports_map", unsafe.Pointer(&client_c), unsafe.Pointer(&worker_c), bpf.BPF_ANY)
+    // Update Ports Map with conn->conn_w and set conn offsets to 0.
+    err := bpf.UpdateElement(maps.ports_map, "ports_map", unsafe.Pointer(&client_c), unsafe.Pointer(&worker_c), bpf.BPF_ANY)
     if (err != nil) {
         fmt.Println("Error in updating map: ", err.Error())
         return
     } 
     fmt.Println("complete updating map")
+    
+    zero := C.int(0)
+    err = bpf.UpdateElement(maps.seq_offsets, "seq_offsets", unsafe.Pointer(&client_c), unsafe.Pointer(&zero), bpf.BPF_ANY)
+    if (err != nil) {
+        fmt.Println("Error in updating map: ", err.Error())
+        return
+    } 
+    fmt.Println("complete updating seq_offsets map")
 
+    err = bpf.UpdateElement(maps.ack_offsets, "ack_offsets", unsafe.Pointer(&client_c), unsafe.Pointer(&zero), bpf.BPF_ANY)
+    if (err != nil) {
+        fmt.Println("Error in updating map: ", err.Error())
+        return
+    } 
+    fmt.Println("complete updating ack_offsets map")
+
+    // Update Ports Map with rev(conn_w)->rev(conn) and set rev(conn_w)'s offsets to 0
     r_client := reverse(client_c)
     r_worker := reverse(worker_c)
-
-    err = bpf.UpdateElement(conn_map_fd, "ports_map", unsafe.Pointer(&r_worker), unsafe.Pointer(&r_client), bpf.BPF_ANY)
+    err = bpf.UpdateElement(maps.ports_map, "ports_map", unsafe.Pointer(&r_worker), unsafe.Pointer(&r_client), bpf.BPF_ANY)
     if (err != nil) {
         fmt.Println("Error in updating map: ", err.Error())
         return
     } 
     fmt.Println("complete updating map")
+
+    err = bpf.UpdateElement(maps.seq_offsets, "seq_offsets", unsafe.Pointer(&r_worker), unsafe.Pointer(&zero), bpf.BPF_ANY)
+    if (err != nil) {
+        fmt.Println("Error in updating map: ", err.Error())
+        return
+    } 
+    fmt.Println("complete updating seq_offsets map")
+
+    err = bpf.UpdateElement(maps.ack_offsets, "ack_offsets", unsafe.Pointer(&r_worker), unsafe.Pointer(&zero), bpf.BPF_ANY)
+    if (err != nil) {
+        fmt.Println("Error in updating map: ", err.Error())
+        return
+    } 
+    fmt.Println("complete updating ack_offsets map")
 
     // Receive messages from the client
     buffer := make([]byte, 1024)

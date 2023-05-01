@@ -216,8 +216,8 @@ func handleConnection(conn net.Conn, conn_w net.Conn, maps maps_fd) {
     } 
     fmt.Println("complete updating ack_offsets map")
     
-    var inv_seq_off = C.int(-1 * seq_off)
-    var inv_ack_off = C.int(-1 * ack_off)
+    var inv_seq_off = C.int(w_seq - c_ack)
+    var inv_ack_off = C.int(w_ack - c_seq)
     err = bpf.UpdateElement(maps.seq_offsets, "seq_offsets", unsafe.Pointer(&worker_c), unsafe.Pointer(&inv_seq_off), bpf.BPF_ANY)
     if (err != nil) {
         fmt.Println("Error in updating seq_offsets map: ", err.Error())

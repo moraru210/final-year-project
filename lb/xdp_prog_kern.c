@@ -90,11 +90,9 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	struct ethhdr *ethh;
 	struct iphdr *iph;
 	struct tcphdr *tcph;
-	__u32 action = XDP_DROP; /* Default action */
+	__u32 action = XDP_PASS; /* Default action */
 	struct hdr_cursor nh;
 	int eth_type, ip_type;
-
-	struct connection conn;
 
 	nh.pos = data;
 
@@ -102,7 +100,6 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 	eth_type = parse_ethhdr(&nh, data_end, &ethh);
 	if (eth_type < 0) {
-		action = XDP_ABORTED;
 		goto OUT;
 	}
 	bpf_printk("parsed ethhdr");
@@ -120,183 +117,63 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	bpf_printk("checked if TCP");
 
 	if (parse_tcphdr(&nh, data_end, &tcph) < 0) {
-		action = XDP_ABORTED;
 		goto OUT;
 	}
 	bpf_printk("parsed TCP header");
 
+	struct connection conn;
 	conn.src_port = bpf_ntohs(tcph->source);
 	conn.dst_port = bpf_ntohs(tcph->dest);
 
-	if (conn.dst_port == 4170 || conn.dst_port == 4169) {
-		//packet is intended for the laod balancer
-		bpf_printk("packet for dst %d, src %d", conn.dst_port, conn.src_port);
-
-		unsigned int seq_no = bpf_ntohl(tcph->seq);
-		bpf_printk("seq_no: %u, after endian conversion is: %u", tcph->seq, seq_no);
-		unsigned int ack_no = bpf_ntohl(tcph->ack_seq);
-		bpf_printk("ack_seq_no: %u, after endian conversion is: %u", tcph->ack_seq, ack_no);
-
-		if (tcph->syn && !(tcph->ack)) {
-			//initialising connection in maps
-			bpf_printk("handling syn packet");
-			bpf_printk("before updating ports map");
-			// choosing target:
-			unsigned int target = 4172 - (conn.dst_port % NO_TARGETS);
-			bpf_printk("target chosen is %u", target);
-
-			struct connection new_conn;
-			new_conn.src_port = conn.dst_port;
-			new_conn.dst_port = target;
-
-			signed int zero = 0;
-
-			if (bpf_map_update_elem(&ports_map, &new_conn, &conn, 0) < 0) {
-				action = XDP_ABORTED;
-				goto OUT;
-			}
-			bpf_printk("init ports map with conn.src %u and conn.dst %u", new_conn.src_port, new_conn.dst_port);
-			if (bpf_map_update_elem(&ports_map, &conn, &new_conn, 0) < 0) {
-				action = XDP_ABORTED;
-				goto OUT;
-			}
-			bpf_printk("init ports map with conn.src %u and conn.dst %u", conn.src_port, conn.dst_port);
-
-			if (bpf_map_update_elem(&seq_offsets, &conn, &zero, 0) < 0) {
-				action = XDP_ABORTED;
-				goto OUT;
-			}
-			bpf_printk("init seq offsets map");
-
-			if (bpf_map_update_elem(&ack_offsets, &conn, &zero, 0) < 0) {
-				action = XDP_ABORTED;
-				goto OUT;
-			}
-			bpf_printk("init ack offsets map");
-
-			tcph->source = bpf_htons(new_conn.src_port);
-			tcph->dest = bpf_htons(new_conn.dst_port);		
-
-		}  else if (tcph->psh) {
-			//packet is sent from client, containing data for listeners
-			//check offset maps and apply offsets
-			bpf_printk("entered psh flag case");
-			struct connection client_conn;
-			client_conn = conn;
-
-			struct connection *target_conn_ptr = bpf_map_lookup_elem(&ports_map, &client_conn);
-			if (!target_conn_ptr) {
-				bpf_printk("could not query ports_map for rerouting");
-				action = XDP_ABORTED;
-				goto OUT;
-			}
-			struct connection target_conn = *target_conn_ptr;
-			bpf_printk("target retrieved as %u", target_conn.dst_port);
-
-			signed int *seq_off_ptr = bpf_map_lookup_elem(&seq_offsets, &client_conn);
-			if (!seq_off_ptr) {
-				bpf_printk("could not query seq_offsets for rerouting");
-				action = XDP_ABORTED;
-				goto OUT;
-			}
-			signed int seq_off = *seq_off_ptr;
-			bpf_printk("seq off retrieved is %u", seq_off);
-
-			signed int *ack_off_ptr = bpf_map_lookup_elem(&ack_offsets, &client_conn);
-			if (!ack_off_ptr) {
-				bpf_printk("could not query ack_offsets for rerouting");
-				action = XDP_ABORTED;
-				goto OUT;
-			}
-			signed int ack_off = *ack_off_ptr;
-			bpf_printk("ack off retrieved is %u", ack_off);
-
-			unsigned int seq_new = seq_no - seq_off;
-			unsigned int ack_seq_new = ack_no - ack_off;
-
-			tcph->source = bpf_htons(target_conn.src_port);
-			tcph->dest = bpf_htons(target_conn.dst_port);
-			tcph->seq = bpf_htonl(seq_new);
-			tcph->ack_seq = bpf_htonl(ack_seq_new);
-			bpf_printk("completed rewrite of packet from client to send to target");
-
-		}  else if (conn.src_port >= 4171 && conn.src_port <= 4172) {
-			//packet is received from one of target listeners
-			//check for offsets and apply offsets
-			bpf_printk("handling packet from target with port %u", conn.src_port);
-			struct connection query_conn;
-			query_conn.src_port = conn.dst_port;
-			query_conn.dst_port = conn.src_port;
-
-			struct connection client_conn;
-			struct connection *client_conn_ptr = bpf_map_lookup_elem(&ports_map, &query_conn);
-			if (!client_conn_ptr) {
-				bpf_printk("could not query ports_map for rerouting");
-				action = XDP_ABORTED;
-				goto OUT;
-			}
-			client_conn = *client_conn_ptr;
-			bpf_printk("retrieved client connection from map successfully");
-
-			unsigned int *seq_off = bpf_map_lookup_elem(&seq_offsets, &client_conn);
-			if (!seq_off) {
-				bpf_printk("could not query ports_map for rerouting");
-				action = XDP_ABORTED;
-				goto OUT;
-			}
-			bpf_printk("seq off retrieved is %u", *seq_off);
-
-			unsigned int *ack_off = bpf_map_lookup_elem(&ack_offsets, &client_conn);
-			if (!ack_off) {
-				bpf_printk("could not query ports_map for rerouting");
-				action = XDP_ABORTED;
-				goto OUT;
-			}
-			bpf_printk("ack_seq off retrieved is %u", *ack_off);
-
-			unsigned int new_seq_no = seq_no + *ack_off;
-			bpf_printk("new seq no is %u", new_seq_no);
-			unsigned int new_ack_no = ack_no + *seq_off;
-			bpf_printk("new ack_seq no is %u", new_ack_no);
-
-			tcph->source = bpf_htons(client_conn.dst_port);
-			tcph->dest = bpf_htons(client_conn.src_port);
-			tcph->seq = bpf_htonl(new_seq_no);
-			tcph->ack_seq = bpf_htonl(new_ack_no);
-			bpf_printk("completed rewrite of packet from target to send to client");
-
-		} else {
-			bpf_printk("reached else statement!");
-			struct connection *target_conn_ptr = bpf_map_lookup_elem(&ports_map, &conn);
-			if (!target_conn_ptr) {
-				bpf_printk("could not query ports_map for rerouting");
-				action = XDP_ABORTED;
-				goto OUT;
-			}
-			struct connection target_conn = *target_conn_ptr;
-			bpf_printk("target retrieved as %u", target_conn.dst_port);
-
-			tcph->dest = bpf_htons(target_conn.dst_port);
-			tcph->source = bpf_htons(target_conn.src_port);
+	if (conn.dst_port == 8080 || (conn.src_port == 4170 || conn.src_port == 4171)) {
+		bpf_printk("before updating seq map");
+		if (bpf_map_update_elem(&seq_map, &conn, &tcph->seq, 0) < 0) {
+			bpf_printk("failed updating seq map");
+			action = XDP_ABORTED;
+			goto OUT;
 		}
-		
-		if (tcph->ack) {
-			bpf_printk("ack packet");
-			bpf_printk("before updating seq map");
-			if (bpf_map_update_elem(&seq_map, &conn, &seq_no, 0) < 0) {
-				action = XDP_ABORTED;
-				goto OUT;
-			}
-			bpf_printk("updated seq map");
+		bpf_printk("successfully updated seq map");
 
-			bpf_printk("before updating ack map");
-			if (bpf_map_update_elem(&ack_map, &conn, &ack_no, 0) < 0) {
-				action = XDP_ABORTED;
-				goto OUT;
-			}
-			bpf_printk("updated ack map");
-			bpf_printk("completed updating seq and ack maps");
+		bpf_printk("before updating ack map");
+		if (bpf_map_update_elem(&ack_map, &conn, &tcph->ack_seq, 0) < 0) {
+			bpf_printk("failed updating ack map");
+			action = XDP_ABORTED;
+			goto OUT;
 		}
+		bpf_printk("successfully updated ack map");
+	}
+
+	struct connection *outgoing_conn_ptr = bpf_map_lookup_elem(&ports_map, &conn);
+	if (!outgoing_conn_ptr) {
+		bpf_printk("could not query ports_map for rerouting");
+		goto OUT;
+	} else {
+		bpf_printk("found connection to rerouter to");
+		struct connection outgoing_conn = *(outgoing_conn_ptr);
+
+		signed int *seq_off_ptr = bpf_map_lookup_elem(&seq_offsets, &conn);
+		if (!seq_off_ptr) {
+			bpf_printk("could not find offset for seq no");
+			action = XDP_ABORTED;
+			goto OUT;
+		}
+		signed int seq_off = *seq_off_ptr;
+
+		signed int *ack_off_ptr = bpf_map_lookup_elem(&ack_offsets, &conn);
+		if (!ack_off_ptr) {
+			bpf_printk("could not find offset for seq no");
+			action = XDP_ABORTED;
+			goto OUT;
+		}
+		signed int ack_off = *ack_off_ptr;
+
+		unsigned int cur_seq = tcph->seq;
+		unsigned int cur_ack = tcph->ack_seq;
+
+		tcph->source = bpf_htons(outgoing_conn.src_port);
+		tcph->dest = bpf_htons(outgoing_conn.dst_port);
+		tcph->seq = cur_seq - seq_off;
+		tcph->ack_seq = cur_ack - ack_off; 
 
 		swap_src_dst_ipv4(iph);
 		bpf_printk("Swapped ip addresses");

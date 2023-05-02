@@ -44,6 +44,8 @@ func main() {
         os.Exit(1)
     }
 
+    fmt.Println("first arg: %d and second arg: %d", client_one, client_two)
+
 	const connection_map_path = "/sys/fs/bpf/lo/ports_map"
     ports_map_fd, err := bpf.ObjGet(connection_map_path)
     if (err != nil) {
@@ -106,12 +108,12 @@ func main() {
 }
 
 func swap_conn_workers(maps maps_fd, c_conn_one C.struct_connection, c_conn_two C.struct_connection) {
-	w_conn_one := find_worker_conn(maps.ports_map, c_conn_one)
+	w_conn_one := reverse(find_worker_conn(maps.ports_map, c_conn_one))
     if (w_conn_one.src_port == 0 && w_conn_one.dst_port == 0) {
         fmt.Println("could not find w_conn for first conn")
         return
     }
-	w_conn_two := find_worker_conn(maps.ports_map, c_conn_two)
+	w_conn_two := reverse(find_worker_conn(maps.ports_map, c_conn_two))
     if (w_conn_two.src_port == 0 && w_conn_two.dst_port == 0) {
         fmt.Println("could not find w_conn for second conn")
         return
@@ -119,10 +121,16 @@ func swap_conn_workers(maps maps_fd, c_conn_one C.struct_connection, c_conn_two 
 
 	cco_seq, cco_ack, check_one := get_seq_and_ack(maps, c_conn_one)
     wco_seq, wco_ack, check_two := get_seq_and_ack(maps, w_conn_one)
-    if (check_one == 0 || check_two == 0) {
+    if (check_one == 0) {
         fmt.Println("something went wrong when retrieving seq/ack")
         return
     }
+    fmt.Println("first worked")
+    if (check_two == 0) {
+        fmt.Println("something went wrong when retrieving seq/ack")
+        return
+    }
+    fmt.Println("second worked")
 
     cct_seq, cct_ack, check_three := get_seq_and_ack(maps, c_conn_two)
     wct_seq, wct_ack, check_four := get_seq_and_ack(maps, w_conn_two)
@@ -146,6 +154,40 @@ func swap_conn_workers(maps maps_fd, c_conn_one C.struct_connection, c_conn_two 
         w_ack: wco_ack,
     }
     set_offsets(maps, c_conn_two, w_conn_one, second_seq_ack)
+
+    r_worker_one := reverse(w_conn_one)
+    err := bpf.UpdateElement(maps.ports_map, "ports_map", unsafe.Pointer(&c_conn_two), unsafe.Pointer(&r_worker_one), bpf.BPF_ANY)
+    if (err != nil) {
+        fmt.Println("Error in updating ports_map map: ", err.Error())
+        return
+    } 
+    fmt.Println("complete updating ports_map")
+
+    // Update Ports Map with conn_w->rev(conn) 
+    r_client_two := reverse(c_conn_two)
+    err = bpf.UpdateElement(maps.ports_map, "ports_map", unsafe.Pointer(&w_conn_one), unsafe.Pointer(&r_client_two), bpf.BPF_ANY)
+    if (err != nil) {
+        fmt.Println("Error in updating map: ", err.Error())
+        return
+    } 
+    fmt.Println("complete updating map")
+
+    r_worker_two := reverse(w_conn_two)
+    err = bpf.UpdateElement(maps.ports_map, "ports_map", unsafe.Pointer(&c_conn_one), unsafe.Pointer(&r_worker_two), bpf.BPF_ANY)
+    if (err != nil) {
+        fmt.Println("Error in updating ports_map map: ", err.Error())
+        return
+    } 
+    fmt.Println("complete updating ports_map")
+
+    // Update Ports Map with conn_w->rev(conn) 
+    r_client_one := reverse(c_conn_one)
+    err = bpf.UpdateElement(maps.ports_map, "ports_map", unsafe.Pointer(&w_conn_two), unsafe.Pointer(&r_client_one), bpf.BPF_ANY)
+    if (err != nil) {
+        fmt.Println("Error in updating map: ", err.Error())
+        return
+    } 
+    fmt.Println("complete updating map")
 }
 
 func set_offsets(maps maps_fd, c_conn C.struct_connection, w_conn C.struct_connection, sas seq_ack_struct) {
@@ -190,7 +232,7 @@ func get_seq_and_ack(maps maps_fd, conn C.struct_connection) (C.uint, C.uint, in
     seq_no := C.uint(0)
     err := bpf.LookupElement(maps.seq_map, unsafe.Pointer(&conn), unsafe.Pointer(&seq_no))
     if (err != nil) {
-        fmt.Println("Error, could not find the worker connection: ", err.Error())
+        fmt.Println("Error, could not find the seq from map: ", err.Error())
         return 0, 0, 0
     }
     fmt.Println("completed seq_map lookup")
@@ -198,7 +240,7 @@ func get_seq_and_ack(maps maps_fd, conn C.struct_connection) (C.uint, C.uint, in
     ack_no := C.uint(0)
     err = bpf.LookupElement(maps.ack_map, unsafe.Pointer(&conn), unsafe.Pointer(&ack_no))
     if (err != nil) {
-        fmt.Println("Error, could not find the worker connection: ", err.Error())
+        fmt.Println("Error, could not find the ack from map: ", err.Error())
         return 0, 0, 0
     }
     fmt.Println("completed ack_map lookup")
@@ -217,4 +259,11 @@ func find_worker_conn(map_fd int, c_conn C.struct_connection) C.struct_connectio
     }
     fmt.Println("completed ports_map lookup")
 	return w_conn
+}
+
+func reverse(conn C.struct_connection) C.struct_connection {
+    var tmp = conn.src_port
+    conn.src_port = conn.dst_port
+    conn.dst_port = tmp
+    return conn
 }

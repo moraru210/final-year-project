@@ -67,5 +67,5 @@ trace_load_and_stats
 trace_read
 xdp_sample_pkts_user
 
-./libbpf
-./basic_solutions
+libbpf/*
+basic-solutions/*

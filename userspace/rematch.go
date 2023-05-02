@@ -1,7 +1,7 @@
 package main
 
 // #cgo CFLAGS: -g -Wall
-// #include "../lb/common.h"
+// #include "../kernel/common.h"
 import "C"
 import (
 	"fmt"

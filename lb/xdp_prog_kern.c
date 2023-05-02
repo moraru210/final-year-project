@@ -127,7 +127,8 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 	if (conn.dst_port == 8080 || (conn.src_port == 4170 || conn.src_port == 4171)) {
 		bpf_printk("before updating seq map");
-		if (bpf_map_update_elem(&seq_map, &conn, &tcph->seq, 0) < 0) {
+		unsigned int seq_no = bpf_ntohl(tcph->seq);
+		if (bpf_map_update_elem(&seq_map, &conn, &seq_no, 0) < 0) {
 			bpf_printk("failed updating seq map");
 			action = XDP_ABORTED;
 			goto OUT;
@@ -135,7 +136,8 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		bpf_printk("successfully updated seq map");
 
 		bpf_printk("before updating ack map");
-		if (bpf_map_update_elem(&ack_map, &conn, &tcph->ack_seq, 0) < 0) {
+		unsigned int ack_no = bpf_ntohl(tcph->ack_seq);
+		if (bpf_map_update_elem(&ack_map, &conn, &ack_no, 0) < 0) {
 			bpf_printk("failed updating ack map");
 			action = XDP_ABORTED;
 			goto OUT;
@@ -167,13 +169,15 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		}
 		signed int ack_off = *ack_off_ptr;
 
-		unsigned int cur_seq = tcph->seq;
-		unsigned int cur_ack = tcph->ack_seq;
+		unsigned int cur_seq = bpf_ntohs(tcph->seq);
+		unsigned int cur_ack = bpf_ntohs(tcph->ack_seq);
 
 		tcph->source = bpf_htons(outgoing_conn.src_port);
 		tcph->dest = bpf_htons(outgoing_conn.dst_port);
-		tcph->seq = cur_seq - seq_off;
-		tcph->ack_seq = cur_ack - ack_off; 
+		unsigned int new_seq = cur_seq - seq_off;
+		tcph->seq = bpf_htonl(new_seq);
+		unsigned int new_ack_seq = cur_ack - ack_off; 
+		tcph->ack_seq = bpf_htonl(new_ack_seq);
 
 		swap_src_dst_ipv4(iph);
 		bpf_printk("Swapped ip addresses");

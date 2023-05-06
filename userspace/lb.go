@@ -1,7 +1,11 @@
 package main
 
-// #cgo CFLAGS: -g -Wall
-// #include "../kernel/common.h"
+/*
+#cgo CFLAGS: -g -Wall
+#include "../kernel/common.h"
+#include <arpa/inet.h>
+#include <stdint.h>
+*/
 import "C"
 import (
     "fmt"
@@ -136,9 +140,14 @@ func handleConnection(conn net.Conn, conn_w net.Conn, maps maps_fd) {
 
     fmt.Printf("Client connected from %s:%d\n", c_ip, c_port)
 
+    lo_ip := C.inet_addr(C.CString("0x7f000001"))
+    fmt.Println("lo_ip is: ", lo_ip)
+
     client_c := C.struct_connection{
         src_port: c_port,
         dst_port: 8080,
+        src_ip: lo_ip,
+        dst_ip: lo_ip,
     }
 
     fmt.Printf("Access client connection struct src_port %d\n", client_c.src_port);
@@ -156,6 +165,8 @@ func handleConnection(conn net.Conn, conn_w net.Conn, maps maps_fd) {
     worker_c := C.struct_connection{
         src_port: w_rem_port,
         dst_port: w_loc_port,
+        src_ip: lo_ip,
+        dst_ip: lo_ip,
     }
 
     fmt.Printf("Access worker connection struct dst_port %d\n", worker_c.dst_port);
@@ -266,8 +277,11 @@ func handleConnection(conn net.Conn, conn_w net.Conn, maps maps_fd) {
 }
 
 func reverse(conn C.struct_connection) C.struct_connection {
-    var tmp = conn.src_port
+    var tmp_p = conn.src_port
+    var tmp_i = conn.src_ip
     conn.src_port = conn.dst_port
-    conn.dst_port = tmp
+    conn.dst_port = tmp_p
+    conn.src_ip = conn.dst_ip
+    conn.dst_ip = tmp_i
     return conn
 }

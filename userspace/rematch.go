@@ -9,6 +9,8 @@ import (
     "strconv"
 	"github.com/cilium/cilium/pkg/bpf"
     "unsafe"
+    "net"
+    "encoding/binary"
 )
 
 type maps_fd struct {
@@ -93,15 +95,26 @@ func main() {
         seq_map: seq_map_fd,
         ack_map: ack_map_fd,
     }
+    
+    ip := net.ParseIP("127.0.0.1")
+    if ip == nil {
+        fmt.Println("invalid ip address provided")
+        return
+    }
+    lo_ip := C.uint(binary.BigEndian.Uint64(ip.To16()))
 
 	c_conn_one := C.struct_connection{
 		src_port: C.uint(client_one),
 		dst_port: 8080,
+        src_ip: lo_ip,
+        dst_ip: lo_ip,
 	}
 
 	c_conn_two := C.struct_connection{
 		src_port: C.uint(client_two),
 		dst_port: 8080,
+        src_ip: lo_ip,
+        dst_ip: lo_ip,
 	}
 
 	swap_conn_workers(maps, c_conn_one, c_conn_two)
@@ -251,6 +264,8 @@ func find_worker_conn(map_fd int, c_conn C.struct_connection) C.struct_connectio
 	var w_conn = C.struct_connection{
 		src_port:0, 
 		dst_port:0,
+        src_ip:0,
+        dst_ip:0,
 	}
     err := bpf.LookupElement(map_fd, unsafe.Pointer(&c_conn), unsafe.Pointer(&w_conn))
     if (err != nil) {
@@ -262,8 +277,11 @@ func find_worker_conn(map_fd int, c_conn C.struct_connection) C.struct_connectio
 }
 
 func reverse(conn C.struct_connection) C.struct_connection {
-    var tmp = conn.src_port
+    var tmp_p = conn.src_port
+    var tmp_i = conn.src_ip
     conn.src_port = conn.dst_port
-    conn.dst_port = tmp
+    conn.dst_port = tmp_p
+    conn.src_ip = conn.dst_ip
+    conn.dst_ip = tmp_i
     return conn
 }

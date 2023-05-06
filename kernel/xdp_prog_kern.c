@@ -7,8 +7,6 @@
 #include "../common/rewrite_helpers.h"
 #include "./common.h"
 
-#define NO_TARGETS 2
-
 struct bpf_map_def SEC("maps") ports_map = {
 	.type        = BPF_MAP_TYPE_HASH,
 	.key_size    = sizeof(struct connection),
@@ -48,23 +46,20 @@ static __always_inline __u16 csum_reduce_helper(__u32 csum)
 {
 	csum = ((csum & 0xffff0000) >> 16) + (csum & 0xffff);
 	csum = ((csum & 0xffff0000) >> 16) + (csum & 0xffff);
-
 	return csum;
 }
 
-static inline unsigned short generic_checksum(unsigned short *buf, void *data_end, unsigned long sum, int max) {
-    
+static inline unsigned short generic_checksum(unsigned short *buf, void *data_end, unsigned long sum, int max) 
+{
     for (int i = 0; i < max; i += 2) {
 	if ((void *)(buf + 1) > data_end)
 	    break;
         sum += *buf;
         buf++;
     }
-
     if((void *)buf +1 <= data_end) {
-	sum +=  bpf_htons((*((unsigned char *)buf)) << 8);
+		sum +=  bpf_htons((*((unsigned char *)buf)) << 8);
     }
-
     sum = (sum & 0xffff) + (sum >> 16);
     sum = (sum & 0xffff) + (sum >> 16);
     return ~sum;
@@ -124,8 +119,53 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	struct connection conn;
 	conn.src_port = bpf_ntohs(tcph->source);
 	conn.dst_port = bpf_ntohs(tcph->dest);
+	conn.src_ip = iph->saddr;
+	conn.dst_ip = iph->daddr;
+	bpf_printk("ip before endian conversion s %u and d %u", iph->saddr, iph->daddr);
+	bpf_printk("ip header saddr %u and daddr %u", conn.src_ip, conn.dst_ip);
 
-	if (conn.dst_port == 8080 || (conn.src_port == 4170 || conn.src_port == 4171)) {
+	if (tcph->fin) {
+		bpf_printk("before deleting conn from seq map");
+		if (bpf_map_delete_elem(&seq_map, &conn) < 0) {
+			bpf_printk("failed deleting from seq map");
+			action = XDP_ABORTED;
+			goto OUT;
+		}
+		bpf_printk("successfully deleted from seq map");
+
+		bpf_printk("before deleting conn from ack map");
+		if (bpf_map_delete_elem(&ack_map, &conn) < 0) {
+			bpf_printk("failed deleting from ack map");
+			action = XDP_ABORTED;
+			goto OUT;
+		}
+		bpf_printk("successfully deleted from ack map");
+
+		bpf_printk("before deleting conn from seq offsets");
+		if (bpf_map_delete_elem(&seq_offsets, &conn) < 0) {
+			bpf_printk("failed deleting from seq offsets");
+			action = XDP_ABORTED;
+			goto OUT;
+		}
+		bpf_printk("successfully deleted from seq offsets");
+
+		bpf_printk("before deleting conn from ack offsets");
+		if (bpf_map_delete_elem(&ack_offsets, &conn) < 0) {
+			bpf_printk("failed deleting from ack offsets");
+			action = XDP_ABORTED;
+			goto OUT;
+		}
+		bpf_printk("successfully deleted from ack offsets");
+
+		bpf_printk("before deleting conn from  ports map");
+		if (bpf_map_delete_elem(&ports_map, &conn) < 0) {
+			bpf_printk("failed deleting from ports map");
+			action = XDP_ABORTED;
+			goto OUT;
+		}
+		bpf_printk("successfully deleted from ports map");
+		
+	} else if (conn.dst_port == 8080 || (conn.src_port == 4170 || conn.src_port == 4171)) {
 		bpf_printk("before updating seq map");
 		unsigned int seq_no = bpf_ntohl(tcph->seq);
 		if (bpf_map_update_elem(&seq_map, &conn, &seq_no, 0) < 0) {
@@ -169,8 +209,8 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		}
 		signed int ack_off = *ack_off_ptr;
 
-		unsigned int cur_seq = bpf_ntohs(tcph->seq);
-		unsigned int cur_ack = bpf_ntohs(tcph->ack_seq);
+		unsigned int cur_seq = bpf_ntohl(tcph->seq);
+		unsigned int cur_ack = bpf_ntohl(tcph->ack_seq);
 
 		tcph->source = bpf_htons(outgoing_conn.src_port);
 		tcph->dest = bpf_htons(outgoing_conn.dst_port);
@@ -179,8 +219,11 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		unsigned int new_ack_seq = cur_ack - ack_off; 
 		tcph->ack_seq = bpf_htonl(new_ack_seq);
 
-		swap_src_dst_ipv4(iph);
-		bpf_printk("Swapped ip addresses");
+		//swap_src_dst_ipv4(iph);
+		iph->saddr = outgoing_conn.src_ip;
+		iph->daddr = outgoing_conn.dst_ip;
+		bpf_printk("modified ip addresses");
+		bpf_printk("ip header saddr %u and daddr %u", outgoing_conn.src_ip, outgoing_conn.dst_ip);
 
 		swap_src_dst_mac(ethh);
 		bpf_printk("Swapped eth addresses");

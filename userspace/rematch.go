@@ -48,52 +48,25 @@ func main() {
 
     fmt.Println("first arg: %d and second arg: %d", client_one, client_two)
 
-	const connection_map_path = "/sys/fs/bpf/lo/ports_map"
-    ports_map_fd, err := bpf.ObjGet(connection_map_path)
+	const connection_map_path = "/sys/fs/bpf/lo/conn_map"
+    conn_map_fd, err := bpf.ObjGet(connection_map_path)
     if (err != nil) {
         fmt.Println("Error finding map object: ", err.Error())
         return
     }
-    fmt.Println("complete finding ports_map")
+    fmt.Println("complete finding conn_map")
 
-    const seq_offsets_path = "/sys/fs/bpf/lo/seq_offsets"
-    seq_offsets_fd, err := bpf.ObjGet(seq_offsets_path)
+    const numbers_map_path = "/sys/fs/bpf/lo/numbers_map"
+    numbers_map_fd, err := bpf.ObjGet(numbers_map_path)
     if (err != nil) {
         fmt.Println("Error finding map object: ", err.Error())
         return
     }
-    fmt.Println("complete finding seq_offsets map")
-
-    const ack_offsets_path = "/sys/fs/bpf/lo/ack_offsets"
-    ack_offsets_fd, err := bpf.ObjGet(ack_offsets_path)
-    if (err != nil) {
-        fmt.Println("Error finding map object: ", err.Error())
-        return
-    }
-    fmt.Println("complete finding ack_offsets map")
-
-    const seq_map_path = "/sys/fs/bpf/lo/seq_map"
-    seq_map_fd, err := bpf.ObjGet(seq_map_path)
-    if (err != nil) {
-        fmt.Println("Error finding map object: ", err.Error())
-        return
-    }
-    fmt.Println("complete finding seq_map")
-
-    const ack_map_path = "/sys/fs/bpf/lo/ack_map"
-    ack_map_fd, err := bpf.ObjGet(ack_map_path)
-    if (err != nil) {
-        fmt.Println("Error finding map object: ", err.Error())
-        return
-    }
-    fmt.Println("complete finding ack_map")
+    fmt.Println("complete finding numbers_map")
 
     maps := maps_fd{
         ports_map: ports_map_fd,
         seq_offsets: seq_offsets_fd,
-        ack_offsets: ack_offsets_fd,
-        seq_map: seq_map_fd,
-        ack_map: ack_map_fd,
     }
     
     ip := net.ParseIP("127.0.0.1")

@@ -7,39 +7,18 @@
 #include "../common/rewrite_helpers.h"
 #include "./common.h"
 
-struct bpf_map_def SEC("maps") ports_map = {
+struct bpf_map_def SEC("maps") conn_map = {
 	.type        = BPF_MAP_TYPE_HASH,
 	.key_size    = sizeof(struct connection),
 	.value_size  = sizeof(struct connection),
 	.max_entries = 20,
 };
 
-struct bpf_map_def SEC("maps") seq_map = {
+struct bpf_map_def SEC("maps") numbers_map = {
 	.type        = BPF_MAP_TYPE_HASH,
 	.key_size    = sizeof(struct connection),
-	.value_size  = sizeof(unsigned int),
+	.value_size  = sizeof(struct numbers),
 	.max_entries = 20,
-};
-
-struct bpf_map_def SEC("maps") ack_map = {
-	.type        = BPF_MAP_TYPE_HASH,
-	.key_size    = sizeof(struct connection),
-	.value_size  = sizeof(unsigned int),
-	.max_entries = 20,
-};
-
-struct bpf_map_def SEC("maps") seq_offsets = {
-	.type        = BPF_MAP_TYPE_HASH,
-	.key_size    = sizeof(struct connection),
-	.value_size  = sizeof(signed int),
-	.max_entries = 20,
-};
-
-struct bpf_map_def SEC("maps") ack_offsets = {
-	.type        = BPF_MAP_TYPE_HASH,
-	.key_size    = sizeof(struct connection),
-	.value_size  = sizeof(signed int),
-	.max_entries = 18,
 };
 
 static __always_inline __u16 csum_reduce_helper(__u32 csum)
@@ -125,89 +104,81 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	bpf_printk("ip header saddr %u and daddr %u", conn.src_ip, conn.dst_ip);
 
 	if (tcph->fin) {
-		bpf_printk("before deleting conn from seq map");
-		if (bpf_map_delete_elem(&seq_map, &conn) < 0) {
-			bpf_printk("failed deleting from seq map");
+		bpf_printk("before deleting numbers from numbers map");
+		if (bpf_map_delete_elem(&numbers_map, &conn) < 0) {
+			bpf_printk("failed deleting numbers from numbers map");
 			action = XDP_ABORTED;
 			goto OUT;
 		}
-		bpf_printk("successfully deleted from seq map");
+		bpf_printk("successfully deleted numbers from numbers map");
 
-		bpf_printk("before deleting conn from ack map");
-		if (bpf_map_delete_elem(&ack_map, &conn) < 0) {
-			bpf_printk("failed deleting from ack map");
+		struct connection *other_conn_ptr = bpf_map_lookup_elem(&conn_map, &conn);
+		if (!other_conn_ptr) {
+			bpf_printk("could not find other conn to delete from map");
 			action = XDP_ABORTED;
 			goto OUT;
 		}
-		bpf_printk("successfully deleted from ack map");
-
-		bpf_printk("before deleting conn from seq offsets");
-		if (bpf_map_delete_elem(&seq_offsets, &conn) < 0) {
-			bpf_printk("failed deleting from seq offsets");
-			action = XDP_ABORTED;
-			goto OUT;
-		}
-		bpf_printk("successfully deleted from seq offsets");
-
-		bpf_printk("before deleting conn from ack offsets");
-		if (bpf_map_delete_elem(&ack_offsets, &conn) < 0) {
-			bpf_printk("failed deleting from ack offsets");
-			action = XDP_ABORTED;
-			goto OUT;
-		}
-		bpf_printk("successfully deleted from ack offsets");
+		struct connection other_conn = *other_conn_ptr;
 
 		bpf_printk("before deleting conn from  ports map");
-		if (bpf_map_delete_elem(&ports_map, &conn) < 0) {
+		if (bpf_map_delete_elem(&conn_map, &conn) < 0) {
 			bpf_printk("failed deleting from ports map");
 			action = XDP_ABORTED;
 			goto OUT;
 		}
 		bpf_printk("successfully deleted from ports map");
+
+		bpf_printk("before deleting other conn from  ports map");
+		if (bpf_map_delete_elem(&conn_map, &other_conn) < 0) {
+			bpf_printk("failed deleting from ports map");
+			action = XDP_ABORTED;
+			goto OUT;
+		}
+		bpf_printk("successfully deleted other conn from ports map");
+
 		
 	} else if (conn.dst_port == 8080 || (conn.src_port == 4170 || conn.src_port == 4171)) {
-		bpf_printk("before updating seq map");
+		struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
+		if (!numbers_elem_ptr) {
+			bpf_printk("could not find numbers elem in numers map");
+			action = XDP_ABORTED;
+			goto OUT;
+		}
+		struct numbers numbers_elem = *numbers_elem_ptr;
+		
 		unsigned int seq_no = bpf_ntohl(tcph->seq);
-		if (bpf_map_update_elem(&seq_map, &conn, &seq_no, 0) < 0) {
-			bpf_printk("failed updating seq map");
-			action = XDP_ABORTED;
-			goto OUT;
-		}
-		bpf_printk("successfully updated seq map");
-
-		bpf_printk("before updating ack map");
 		unsigned int ack_no = bpf_ntohl(tcph->ack_seq);
-		if (bpf_map_update_elem(&ack_map, &conn, &ack_no, 0) < 0) {
-			bpf_printk("failed updating ack map");
+
+		numbers_elem.seq_no = seq_no;
+		numbers_elem.ack_no = ack_no;
+
+		bpf_printk("before updating numbers map");
+		if (bpf_map_update_elem(&numbers_map, &conn, &numbers_elem, 0) < 0) {
+			bpf_printk("failed updating numbers map");
 			action = XDP_ABORTED;
 			goto OUT;
 		}
-		bpf_printk("successfully updated ack map");
+		bpf_printk("successfully updated numbers map");
 	}
 
-	struct connection *outgoing_conn_ptr = bpf_map_lookup_elem(&ports_map, &conn);
+	struct connection *outgoing_conn_ptr = bpf_map_lookup_elem(&conn_map, &conn);
 	if (!outgoing_conn_ptr) {
-		bpf_printk("could not query ports_map for rerouting");
+		bpf_printk("could not query conn_map for rerouting");
 		goto OUT;
 	} else {
 		bpf_printk("found connection to rerouter to");
 		struct connection outgoing_conn = *(outgoing_conn_ptr);
 
-		signed int *seq_off_ptr = bpf_map_lookup_elem(&seq_offsets, &conn);
-		if (!seq_off_ptr) {
-			bpf_printk("could not find offset for seq no");
+		struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
+		if (!numbers_elem_ptr) {
+			bpf_printk("could not find numbers elem in numers map");
 			action = XDP_ABORTED;
 			goto OUT;
 		}
-		signed int seq_off = *seq_off_ptr;
+		struct numbers numbers_elem = *numbers_elem_ptr;
 
-		signed int *ack_off_ptr = bpf_map_lookup_elem(&ack_offsets, &conn);
-		if (!ack_off_ptr) {
-			bpf_printk("could not find offset for seq no");
-			action = XDP_ABORTED;
-			goto OUT;
-		}
-		signed int ack_off = *ack_off_ptr;
+		signed int seq_off = numbers_elem.seq_offset;
+		signed int ack_off = numbers_elem.ack_offset;
 
 		unsigned int cur_seq = bpf_ntohl(tcph->seq);
 		unsigned int cur_ack = bpf_ntohl(tcph->ack_seq);

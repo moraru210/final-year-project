@@ -1,7 +1,7 @@
 package main
 
 // #cgo CFLAGS: -g -Wall
-// #include "../kernel/common.h"
+// #include "../../kernel/common.h"
 import "C"
 import (
 	"fmt"
@@ -11,15 +11,8 @@ import (
     "unsafe"
     "net"
     "encoding/binary"
+    "github.com/moraru210/final-year-project/userspace/common"
 )
-
-type maps_fd struct {
-    ports_map int
-    seq_offsets int
-    ack_offsets int
-    seq_map int
-    ack_map int
-}
 
 type seq_ack_struct struct {
     c_seq C.uint
@@ -64,9 +57,9 @@ func main() {
     }
     fmt.Println("complete finding numbers_map")
 
-    maps := maps_fd{
-        ports_map: ports_map_fd,
-        seq_offsets: seq_offsets_fd,
+    maps := common.Maps_fd{
+        Conn_map: conn_map_fd,
+        Numbers_map: numbers_map_fd,
     }
     
     ip := net.ParseIP("127.0.0.1")
@@ -93,144 +86,158 @@ func main() {
 	swap_conn_workers(maps, c_conn_one, c_conn_two)
 }
 
-func swap_conn_workers(maps maps_fd, c_conn_one C.struct_connection, c_conn_two C.struct_connection) {
-	w_conn_one := reverse(find_worker_conn(maps.ports_map, c_conn_one))
+func swap_conn_workers(maps common.Maps_fd, c_conn_one C.struct_connection, c_conn_two C.struct_connection) {
+	w_conn_one := reverse(find_worker_conn(maps.Conn_map, c_conn_one))
     if (w_conn_one.src_port == 0 && w_conn_one.dst_port == 0) {
         fmt.Println("could not find w_conn for first conn")
         return
     }
-	w_conn_two := reverse(find_worker_conn(maps.ports_map, c_conn_two))
+	w_conn_two := reverse(find_worker_conn(maps.Conn_map, c_conn_two))
     if (w_conn_two.src_port == 0 && w_conn_two.dst_port == 0) {
         fmt.Println("could not find w_conn for second conn")
         return
     }
 
-	cco_seq, cco_ack, check_one := get_seq_and_ack(maps, c_conn_one)
-    wco_seq, wco_ack, check_two := get_seq_and_ack(maps, w_conn_one)
-    if (check_one == 0) {
-        fmt.Println("something went wrong when retrieving seq/ack")
+    /******************************/
+    cco := C.struct_numbers{
+        seq_no: C.uint(0),
+        ack_no: C.uint(0),
+        seq_offset: C.int(0),
+        ack_offset: C.int(0),
+    }
+    err := bpf.LookupElement(maps.Numbers_map, unsafe.Pointer(&c_conn_one), unsafe.Pointer(&cco))
+    if (err != nil) {
+        fmt.Println("Error, could not find the ack from map: ", err.Error())
         return
     }
-    fmt.Println("first worked")
-    if (check_two == 0) {
-        fmt.Println("something went wrong when retrieving seq/ack")
-        return
-    }
-    fmt.Println("second worked")
+    fmt.Println("completed numbers_map lookup")
 
-    cct_seq, cct_ack, check_three := get_seq_and_ack(maps, c_conn_two)
-    wct_seq, wct_ack, check_four := get_seq_and_ack(maps, w_conn_two)
-    if(check_three == 0 || check_four == 0) {
-        fmt.Println("something went wrong when retrieving seq/ack")
+    wco := C.struct_numbers{
+        seq_no: C.uint(0),
+        ack_no: C.uint(0),
+        seq_offset: C.int(0),
+        ack_offset: C.int(0),
+    }
+    err = bpf.LookupElement(maps.Numbers_map, unsafe.Pointer(&w_conn_one), unsafe.Pointer(&wco))
+    if (err != nil) {
+        fmt.Println("Error, could not find the ack from map: ", err.Error())
         return
     }
+    fmt.Println("completed numbers_map lookup")
+    /******************************/
+    /******************************/
+    cct := C.struct_numbers{
+        seq_no: C.uint(0),
+        ack_no: C.uint(0),
+        seq_offset: C.int(0),
+        ack_offset: C.int(0),
+    }
+    err = bpf.LookupElement(maps.Numbers_map, unsafe.Pointer(&c_conn_one), unsafe.Pointer(&cct))
+    if (err != nil) {
+        fmt.Println("Error, could not find the numbers elem from map: ", err.Error())
+        return
+    }
+    fmt.Println("completed numbers_map lookup")
 
+    wct := C.struct_numbers{
+        seq_no: C.uint(0),
+        ack_no: C.uint(0),
+        seq_offset: C.int(0),
+        ack_offset: C.int(0),
+    }
+    err = bpf.LookupElement(maps.Numbers_map, unsafe.Pointer(&w_conn_one), unsafe.Pointer(&wct))
+    if (err != nil) {
+        fmt.Println("Error, could not find the numbers elem from map: ", err.Error())
+        return
+    }
+    fmt.Println("completed numbers_map lookup")
+    /*****************************/
     first_seq_ack := seq_ack_struct{
-        c_seq: cco_seq,
-        c_ack: cco_ack,
-        w_seq: wct_seq,
-        w_ack: wct_ack,
+        c_seq: cco.seq_no,
+        c_ack: cco.ack_no,
+        w_seq: wct.seq_no,
+        w_ack: wct.ack_no,
     }
     set_offsets(maps, c_conn_one, w_conn_two, first_seq_ack)
 
     second_seq_ack := seq_ack_struct{
-        c_seq: cct_seq,
-        c_ack: cct_ack,
-        w_seq: wco_seq,
-        w_ack: wco_ack,
+        c_seq: cct.seq_no,
+        c_ack: cct.ack_no,
+        w_seq: wco.seq_no,
+        w_ack: wco.ack_no,
     }
     set_offsets(maps, c_conn_two, w_conn_one, second_seq_ack)
 
     r_worker_one := reverse(w_conn_one)
-    err := bpf.UpdateElement(maps.ports_map, "ports_map", unsafe.Pointer(&c_conn_two), unsafe.Pointer(&r_worker_one), bpf.BPF_ANY)
+    err = bpf.UpdateElement(maps.Conn_map, "conn_map", unsafe.Pointer(&c_conn_two), unsafe.Pointer(&r_worker_one), bpf.BPF_ANY)
     if (err != nil) {
-        fmt.Println("Error in updating ports_map map: ", err.Error())
+        fmt.Println("Error in updating conn_map map: ", err.Error())
         return
     } 
-    fmt.Println("complete updating ports_map")
+    fmt.Println("complete updating conn_map map")
 
-    // Update Ports Map with conn_w->rev(conn) 
+    // Update Conn Map with conn_w->rev(conn) 
     r_client_two := reverse(c_conn_two)
-    err = bpf.UpdateElement(maps.ports_map, "ports_map", unsafe.Pointer(&w_conn_one), unsafe.Pointer(&r_client_two), bpf.BPF_ANY)
+    err = bpf.UpdateElement(maps.Conn_map, "conn_map", unsafe.Pointer(&w_conn_one), unsafe.Pointer(&r_client_two), bpf.BPF_ANY)
     if (err != nil) {
         fmt.Println("Error in updating map: ", err.Error())
         return
     } 
-    fmt.Println("complete updating map")
+    fmt.Println("complete updating conn_map map")
 
     r_worker_two := reverse(w_conn_two)
-    err = bpf.UpdateElement(maps.ports_map, "ports_map", unsafe.Pointer(&c_conn_one), unsafe.Pointer(&r_worker_two), bpf.BPF_ANY)
+    err = bpf.UpdateElement(maps.Conn_map, "conn_map", unsafe.Pointer(&c_conn_one), unsafe.Pointer(&r_worker_two), bpf.BPF_ANY)
     if (err != nil) {
-        fmt.Println("Error in updating ports_map map: ", err.Error())
+        fmt.Println("Error in updating conn_map map: ", err.Error())
         return
     } 
-    fmt.Println("complete updating ports_map")
+    fmt.Println("complete updating conn_map map")
 
     // Update Ports Map with conn_w->rev(conn) 
     r_client_one := reverse(c_conn_one)
-    err = bpf.UpdateElement(maps.ports_map, "ports_map", unsafe.Pointer(&w_conn_two), unsafe.Pointer(&r_client_one), bpf.BPF_ANY)
+    err = bpf.UpdateElement(maps.Conn_map, "conn_map", unsafe.Pointer(&w_conn_two), unsafe.Pointer(&r_client_one), bpf.BPF_ANY)
     if (err != nil) {
-        fmt.Println("Error in updating map: ", err.Error())
+        fmt.Println("Error in updating conn_map map: ", err.Error())
         return
     } 
-    fmt.Println("complete updating map")
+    fmt.Println("complete updating conn_map map")
 }
 
-func set_offsets(maps maps_fd, c_conn C.struct_connection, w_conn C.struct_connection, sas seq_ack_struct) {
+func set_offsets(maps common.Maps_fd, c_conn C.struct_connection, w_conn C.struct_connection, sas seq_ack_struct) {
     fmt.Println("c_seq is %d and c_ack is %d\n", sas.c_seq, sas.c_ack)
     fmt.Println("w_seq is %d and w_ack is %d\n", sas.w_seq, sas.w_ack)
     var seq_off = C.int(sas.c_seq - sas.w_ack) //w is inv direction
     var ack_off = C.int(sas.c_ack - sas.w_seq) //w is inv direction
     fmt.Println("seq_off is %d and ack_off is %d\n", seq_off, ack_off)
 
-    err := bpf.UpdateElement(maps.seq_offsets, "seq_offsets", unsafe.Pointer(&c_conn), unsafe.Pointer(&seq_off), bpf.BPF_ANY)
+    new_c_num := C.struct_numbers{
+        seq_no: sas.c_seq,
+        ack_no: sas.c_ack,
+        seq_offset: seq_off,
+        ack_offset: ack_off,
+    }
+    err := bpf.UpdateElement(maps.Numbers_map, "numbers_map", unsafe.Pointer(&c_conn), unsafe.Pointer(&new_c_num), bpf.BPF_ANY)
     if (err != nil) {
-        fmt.Println("Error in updating seq_offsets map: ", err.Error())
+        fmt.Println("Error in updating numbers_map map: ", err.Error())
         return
     } 
-    fmt.Println("complete updating seq_offsets map")
-
-    err = bpf.UpdateElement(maps.ack_offsets, "ack_offsets", unsafe.Pointer(&c_conn), unsafe.Pointer(&ack_off), bpf.BPF_ANY)
-    if (err != nil) {
-        fmt.Println("Error in updating ack_offsets map: ", err.Error())
-        return
-    } 
-    fmt.Println("complete updating ack_offsets map")
+    fmt.Println("complete updating numbers_map map")
 
     var inv_seq_off = C.int(sas.w_seq - sas.c_ack)
     var inv_ack_off = C.int(sas.w_ack - sas.c_seq)
-    err = bpf.UpdateElement(maps.seq_offsets, "seq_offsets", unsafe.Pointer(&w_conn), unsafe.Pointer(&inv_seq_off), bpf.BPF_ANY)
+
+    new_w_num := C.struct_numbers{
+        seq_no: sas.w_seq,
+        ack_no: sas.w_ack,
+        seq_offset: inv_seq_off,
+        ack_offset: inv_ack_off,
+    }
+    err = bpf.UpdateElement(maps.Numbers_map, "numbers_map", unsafe.Pointer(&w_conn), unsafe.Pointer(&new_w_num), bpf.BPF_ANY)
     if (err != nil) {
-        fmt.Println("Error in updating seq_offsets map: ", err.Error())
+        fmt.Println("Error in updating numbers_map map: ", err.Error())
         return
     } 
-    fmt.Println("complete updating seq_offsets map")
-
-    err = bpf.UpdateElement(maps.ack_offsets, "ack_offsets", unsafe.Pointer(&w_conn), unsafe.Pointer(&inv_ack_off), bpf.BPF_ANY)
-    if (err != nil) {
-        fmt.Println("Error in updating ack_offsets map: ", err.Error())
-        return
-    } 
-    fmt.Println("complete updating ack_offsets map")
-}
-
-func get_seq_and_ack(maps maps_fd, conn C.struct_connection) (C.uint, C.uint, int) {
-    seq_no := C.uint(0)
-    err := bpf.LookupElement(maps.seq_map, unsafe.Pointer(&conn), unsafe.Pointer(&seq_no))
-    if (err != nil) {
-        fmt.Println("Error, could not find the seq from map: ", err.Error())
-        return 0, 0, 0
-    }
-    fmt.Println("completed seq_map lookup")
-
-    ack_no := C.uint(0)
-    err = bpf.LookupElement(maps.ack_map, unsafe.Pointer(&conn), unsafe.Pointer(&ack_no))
-    if (err != nil) {
-        fmt.Println("Error, could not find the ack from map: ", err.Error())
-        return 0, 0, 0
-    }
-    fmt.Println("completed ack_map lookup")
-	return seq_no, ack_no, 1
+    fmt.Println("complete updating numbers_map map")
 }
 
 func find_worker_conn(map_fd int, c_conn C.struct_connection) C.struct_connection {
@@ -245,7 +252,7 @@ func find_worker_conn(map_fd int, c_conn C.struct_connection) C.struct_connectio
         fmt.Println("Error, could not find the worker connection: ", err.Error())
         return w_conn
     }
-    fmt.Println("completed ports_map lookup")
+    fmt.Println("completed conn_map lookup")
 	return w_conn
 }
 

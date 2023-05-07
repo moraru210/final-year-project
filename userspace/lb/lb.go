@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-    const connection_map_path = "/sys/fs/bpf/lo/Conn_map"
+    const connection_map_path = "/sys/fs/bpf/lo/conn_map"
     Conn_map_fd, err := bpf.ObjGet(connection_map_path)
     if (err != nil) {
         fmt.Println("Error finding map object: ", err.Error())
@@ -24,7 +24,7 @@ func main() {
     }
     fmt.Println("complete finding Conn_map")
 
-    const Numbers_map_path = "/sys/fs/bpf/lo/Numbers_map"
+    const Numbers_map_path = "/sys/fs/bpf/lo/numbers_map"
     Numbers_map_fd, err := bpf.ObjGet(Numbers_map_path)
     if (err != nil) {
         fmt.Println("Error finding map object: ", err.Error())

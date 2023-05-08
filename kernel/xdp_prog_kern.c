@@ -14,13 +14,6 @@
     _a > _b ? _a : _b;       \
 })
 
-#define min(a,b)             \
-({                           \
-    __typeof__ (a) _a = (a); \
-    __typeof__ (b) _b = (b); \
-    _a < _b ? _a : _b;       \
-})
-
 struct bpf_map_def SEC("maps") conn_map = {
 	.type        = BPF_MAP_TYPE_HASH,
 	.key_size    = sizeof(struct connection),
@@ -118,8 +111,9 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	bpf_printk("ip before endian conversion s %u and d %u", iph->saddr, iph->daddr);
 	bpf_printk("ip header saddr %u and daddr %u", conn.src_ip, conn.dst_ip);
 
-	if (tcph->rst) {
+	if (tcph->rst && (conn.dst_port != 8080 || conn.dst_port != 4170 || conn.dst_port != 4171 || conn.src_port != 4170 || conn.src_port != 4171 || conn.src_port != 8080)) {
 		bpf_printk("reset packet detected");
+		action = XDP_DROP;
 		goto OUT;
 	} else if (tcph->fin) {
 		bpf_printk("before deleting numbers from numbers map");

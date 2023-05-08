@@ -103,45 +103,42 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	bpf_printk("ip before endian conversion s %u and d %u", iph->saddr, iph->daddr);
 	bpf_printk("ip header saddr %u and daddr %u", conn.src_ip, conn.dst_ip);
 
-	if (tcph->fin) {
+	
+
+	if (tcph->rst) {
+		bpf_printk("reset packet detected");
+		goto OUT;
+	} else if (tcph->fin) {
 		bpf_printk("before deleting numbers from numbers map");
 		if (bpf_map_delete_elem(&numbers_map, &conn) < 0) {
 			bpf_printk("failed deleting numbers from numbers map");
-			action = XDP_ABORTED;
-			goto OUT;
 		}
 		bpf_printk("successfully deleted numbers from numbers map");
 
 		struct connection *other_conn_ptr = bpf_map_lookup_elem(&conn_map, &conn);
 		if (!other_conn_ptr) {
 			bpf_printk("could not find other conn to delete from map");
-			action = XDP_ABORTED;
-			goto OUT;
-		}
-		struct connection other_conn = *other_conn_ptr;
+		} else {
+			struct connection other_conn = *other_conn_ptr;
+			bpf_printk("before deleting other conn from  ports map");
+			if (bpf_map_delete_elem(&conn_map, &other_conn) < 0) {
+				bpf_printk("failed deleting from ports map");
+			}
+			bpf_printk("successfully deleted other conn from ports map");
+		}		
 
 		bpf_printk("before deleting conn from  ports map");
 		if (bpf_map_delete_elem(&conn_map, &conn) < 0) {
 			bpf_printk("failed deleting from ports map");
-			action = XDP_ABORTED;
-			goto OUT;
 		}
 		bpf_printk("successfully deleted from ports map");
 
-		bpf_printk("before deleting other conn from  ports map");
-		if (bpf_map_delete_elem(&conn_map, &other_conn) < 0) {
-			bpf_printk("failed deleting from ports map");
-			action = XDP_ABORTED;
-			goto OUT;
-		}
-		bpf_printk("successfully deleted other conn from ports map");
-
-		
+		goto OUT;
 	} else if (conn.dst_port == 8080 || (conn.src_port == 4170 || conn.src_port == 4171)) {
 		struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
 		if (!numbers_elem_ptr) {
-			bpf_printk("could not find numbers elem in numers map");
-			action = XDP_ABORTED;
+			bpf_printk("could not find numbers elem in numbers map");
+			//action = XDP_ABORTED;
 			goto OUT;
 		}
 		struct numbers numbers_elem = *numbers_elem_ptr;
@@ -155,7 +152,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		bpf_printk("before updating numbers map");
 		if (bpf_map_update_elem(&numbers_map, &conn, &numbers_elem, 0) < 0) {
 			bpf_printk("failed updating numbers map");
-			action = XDP_ABORTED;
+			//action = XDP_ABORTED;
 			goto OUT;
 		}
 		bpf_printk("successfully updated numbers map");

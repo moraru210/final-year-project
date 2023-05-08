@@ -187,8 +187,8 @@ func handleConnection(conn net.Conn, conn_w net.Conn, maps common.Maps_fd) {
     var inv_ack_off = C.int(w_numbers.ack_no - c_numbers.seq_no)
     fmt.Println("Worker: seq_off is %d and ack_off is %d\n", inv_seq_off, inv_ack_off)
 
-    w_numbers.seq_offset = seq_off
-    w_numbers.ack_offset = ack_off
+    w_numbers.seq_offset = inv_seq_off
+    w_numbers.ack_offset = inv_ack_off
 
     err = bpf.UpdateElement(maps.Numbers_map, "Numbers_map", unsafe.Pointer(&worker_c), unsafe.Pointer(&w_numbers), bpf.BPF_ANY)
     if (err != nil) {

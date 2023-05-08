@@ -7,6 +7,20 @@
 #include "../common/rewrite_helpers.h"
 #include "./common.h"
 
+#define max(a,b)             \
+({                           \
+    __typeof__ (a) _a = (a); \
+    __typeof__ (b) _b = (b); \
+    _a > _b ? _a : _b;       \
+})
+
+#define min(a,b)             \
+({                           \
+    __typeof__ (a) _a = (a); \
+    __typeof__ (b) _b = (b); \
+    _a < _b ? _a : _b;       \
+})
+
 struct bpf_map_def SEC("maps") conn_map = {
 	.type        = BPF_MAP_TYPE_HASH,
 	.key_size    = sizeof(struct connection),
@@ -98,12 +112,11 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	struct connection conn;
 	conn.src_port = bpf_ntohs(tcph->source);
 	conn.dst_port = bpf_ntohs(tcph->dest);
+	bpf_printk("tcp src port is %u and dst port is %u", conn.src_port, conn.dst_port);
 	conn.src_ip = iph->saddr;
 	conn.dst_ip = iph->daddr;
 	bpf_printk("ip before endian conversion s %u and d %u", iph->saddr, iph->daddr);
 	bpf_printk("ip header saddr %u and daddr %u", conn.src_ip, conn.dst_ip);
-
-	
 
 	if (tcph->rst) {
 		bpf_printk("reset packet detected");
@@ -135,16 +148,21 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 		goto OUT;
 	} else if (conn.dst_port == 8080 || (conn.src_port == 4170 || conn.src_port == 4171)) {
-		struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
-		if (!numbers_elem_ptr) {
-			bpf_printk("could not find numbers elem in numbers map");
-			//action = XDP_ABORTED;
-			goto OUT;
-		}
-		struct numbers numbers_elem = *numbers_elem_ptr;
-		
 		unsigned int seq_no = bpf_ntohl(tcph->seq);
 		unsigned int ack_no = bpf_ntohl(tcph->ack_seq);
+		
+		struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
+		struct numbers numbers_elem;
+		if (!numbers_elem_ptr) {
+			bpf_printk("could not find numbers elem in numbers map");
+			numbers_elem.seq_offset = 0;
+			numbers_elem.ack_offset = 0;
+		} else {
+			bpf_printk("successfully found numbers elem in numbers map");
+			numbers_elem = *(numbers_elem_ptr);
+			seq_no = max(seq_no, numbers_elem.seq_no);
+			ack_no = max(ack_no, numbers_elem.ack_no);
+		}
 
 		numbers_elem.seq_no = seq_no;
 		numbers_elem.ack_no = ack_no;
@@ -152,7 +170,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		bpf_printk("before updating numbers map");
 		if (bpf_map_update_elem(&numbers_map, &conn, &numbers_elem, 0) < 0) {
 			bpf_printk("failed updating numbers map");
-			//action = XDP_ABORTED;
+			action = XDP_ABORTED;
 			goto OUT;
 		}
 		bpf_printk("successfully updated numbers map");

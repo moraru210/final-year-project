@@ -111,7 +111,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	bpf_printk("ip before endian conversion s %u and d %u", iph->saddr, iph->daddr);
 	bpf_printk("ip header saddr %u and daddr %u", conn.src_ip, conn.dst_ip);
 
-	if (tcph->rst && (conn.dst_port != 8080 || conn.dst_port != 4170 || conn.dst_port != 4171 || conn.src_port != 4170 || conn.src_port != 4171 || conn.src_port != 8080)) {
+	if (tcph->syn && (conn.dst_port != 8080 && conn.dst_port != 4170 && conn.dst_port != 4171 && conn.src_port != 8080 && conn.src_port != 4170 && conn.src_port != 4171)) {
 		bpf_printk("reset packet detected");
 		action = XDP_DROP;
 		goto OUT;
@@ -120,7 +120,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		if (bpf_map_delete_elem(&numbers_map, &conn) < 0) {
 			bpf_printk("failed deleting numbers from numbers map");
 		}
-		bpf_printk("successfully deleted numbers from numbers map");
+		bpf_printk("after attempting to delete numbers from numbers map");
 
 		struct connection *other_conn_ptr = bpf_map_lookup_elem(&conn_map, &conn);
 		if (!other_conn_ptr) {
@@ -131,14 +131,14 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			if (bpf_map_delete_elem(&conn_map, &other_conn) < 0) {
 				bpf_printk("failed deleting from ports map");
 			}
-			bpf_printk("successfully deleted other conn from ports map");
+			bpf_printk("after attempting to delete other conn from ports map");
 		}		
 
 		bpf_printk("before deleting conn from  ports map");
 		if (bpf_map_delete_elem(&conn_map, &conn) < 0) {
 			bpf_printk("failed deleting from ports map");
 		}
-		bpf_printk("successfully deleted from ports map");
+		bpf_printk("after attempting to delete from ports map");
 
 		goto OUT;
 	} else if (conn.dst_port == 8080 || (conn.src_port == 4170 || conn.src_port == 4171)) {

@@ -2,6 +2,8 @@ package main
 
 // #cgo CFLAGS: -g -Wall
 // #include "../../kernel/common.h"
+// #include <arpa/inet.h>
+// #include <stdint.h>
 import "C"
 import (
 	"fmt"
@@ -9,8 +11,6 @@ import (
     "strconv"
 	"github.com/cilium/cilium/pkg/bpf"
     "unsafe"
-    "net"
-    "encoding/binary"
     "github.com/moraru210/final-year-project/userspace/common"
 )
 
@@ -62,12 +62,8 @@ func main() {
         Numbers_map: numbers_map_fd,
     }
     
-    ip := net.ParseIP("127.0.0.1")
-    if ip == nil {
-        fmt.Println("invalid ip address provided")
-        return
-    }
-    lo_ip := C.uint(binary.BigEndian.Uint64(ip.To16()))
+    lo_ip := C.inet_addr(C.CString("0x7f000001"))
+    fmt.Println("lo_ip is: ", lo_ip)
 
 	c_conn_one := C.struct_connection{
 		src_port: C.uint(client_one),
@@ -132,7 +128,7 @@ func swap_conn_workers(maps common.Maps_fd, c_conn_one C.struct_connection, c_co
         seq_offset: C.int(0),
         ack_offset: C.int(0),
     }
-    err = bpf.LookupElement(maps.Numbers_map, unsafe.Pointer(&c_conn_one), unsafe.Pointer(&cct))
+    err = bpf.LookupElement(maps.Numbers_map, unsafe.Pointer(&c_conn_two), unsafe.Pointer(&cct))
     if (err != nil) {
         fmt.Println("Error, could not find the numbers elem from map: ", err.Error())
         return
@@ -145,7 +141,7 @@ func swap_conn_workers(maps common.Maps_fd, c_conn_one C.struct_connection, c_co
         seq_offset: C.int(0),
         ack_offset: C.int(0),
     }
-    err = bpf.LookupElement(maps.Numbers_map, unsafe.Pointer(&w_conn_one), unsafe.Pointer(&wct))
+    err = bpf.LookupElement(maps.Numbers_map, unsafe.Pointer(&w_conn_two), unsafe.Pointer(&wct))
     if (err != nil) {
         fmt.Println("Error, could not find the numbers elem from map: ", err.Error())
         return

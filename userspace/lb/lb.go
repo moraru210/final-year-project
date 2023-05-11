@@ -157,8 +157,6 @@ func setUpWorkerConnections() (net.Conn, net.Conn, error) {
 }
 
 func handleConnection(conn net.Conn, conn_w net.Conn, maps common.Maps_fd) {
-    defer conn.Close()
-
     // Get the client's IP address and port number
     remoteAddr := conn.RemoteAddr().(*net.TCPAddr)
     c_ip := remoteAddr.IP.String()
@@ -275,19 +273,6 @@ func handleConnection(conn net.Conn, conn_w net.Conn, maps common.Maps_fd) {
         return
     } 
     fmt.Println("complete updating map")
-
-    // Receive messages from the client
-    buffer := make([]byte, 1024)
-    for {
-        n, err := conn.Read(buffer)
-        if err != nil {
-            fmt.Println("Error reading:", err.Error())
-            return
-        }
-
-        fmt.Printf("Received message: %s\n", buffer[:n])
-        buffer = make([]byte, 1024)
-    }
 }
 
 func reverse(conn C.struct_connection) C.struct_connection {

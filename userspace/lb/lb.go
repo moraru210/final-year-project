@@ -134,6 +134,57 @@ func cleanup(conn1 net.Conn, conn2 net.Conn, maps common.Maps_fd) {
     /*****/
     fmt.Println("conn2 src: %d and dst %d", c2.src_port, c2.dst_port)
     /*****/
+
+    /*****/
+    // Delete c1 and its inverse (it exists) from conn_map
+    var c1_res = C.struct_connection{
+        src_port: C.uint(0),
+        dst_port: C.uint(0),
+        src_ip: C.uint(0),
+        dst_ip: C.uint(0),
+    }
+    err := bpf.LookupElement(maps.Conn_map, unsafe.Pointer(&c1), unsafe.Pointer(&c1_res))
+    if (err != nil) {
+        fmt.Println("Error, could not find worker's numbers elem: ", err.Error())
+        //return
+    } else {
+        rev_c1_res := reverse(c1_res)
+        del_err := bpf.DeleteElement(maps.Conn_map, unsafe.Pointer(&rev_c1_res))
+        if (del_err != nil) {
+            fmt.Println("could not delete c1 res conn from conn_map: ", del_err.Error())
+        }
+    }
+    del_err := bpf.DeleteElement(maps.Conn_map, unsafe.Pointer(&c1))
+    if (del_err != nil) {
+        fmt.Println("could not delete c1 conn from conn_map: ", del_err.Error())
+    }
+    /*****/
+
+    /*****/
+    // Delete c2 and its inverse (it exists) from conn_map
+    var c2_res = C.struct_connection{
+        src_port: C.uint(0),
+        dst_port: C.uint(0),
+        src_ip: C.uint(0),
+        dst_ip: C.uint(0),
+    }
+    err = bpf.LookupElement(maps.Conn_map, unsafe.Pointer(&c2), unsafe.Pointer(&c2_res))
+    if (err != nil) {
+        fmt.Println("Error, could not find worker's numbers elem: ", err.Error())
+        //return
+    } else {
+        rev_c2_res := reverse(c2_res)
+        del_err := bpf.DeleteElement(maps.Conn_map, unsafe.Pointer(&rev_c2_res))
+        if (del_err != nil) {
+            fmt.Println("could not delete c2 res conn from conn_map: ", del_err.Error())
+        }
+    }
+    del_err = bpf.DeleteElement(maps.Conn_map, unsafe.Pointer(&c2))
+    if (del_err != nil) {
+        fmt.Println("could not delete c2 conn from conn_map: ", del_err.Error())
+    }
+    /*****/
+    fmt.Println("complete cleanup")
 }
 
 func setUpWorkerConnections() (net.Conn, net.Conn, error) {

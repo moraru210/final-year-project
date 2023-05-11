@@ -13,6 +13,9 @@ import (
     "github.com/cilium/cilium/pkg/bpf"
     "unsafe"
     "github.com/moraru210/final-year-project/userspace/common"
+    "os"
+    "os/signal"
+    "syscall"
 )
 
 func main() {
@@ -56,24 +59,81 @@ func main() {
 
     fmt.Println("Server listening on port 8080")
 
-    const num_workers = 2;
+    // Handle interrupt signal
+    sigCh := make(chan os.Signal, 1)
+    signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+    go func() {
+        sig := <-sigCh
+        fmt.Println("Received %v signal, shutting down...", sig)
+        cleanup(conn1, conn2, maps)
+        ln.Close()
+        os.Exit(0)
+    }()
+    
+    num_workers := 2
     rr := 1
     for {
-        // Accept new connection
         conn, err := ln.Accept()
-        if err != nil {
-            fmt.Println("Error accepting:", err.Error())
-            continue
-        }
+        select {
+		case <-sigCh:
+			fmt.Println("Received signal, exiting Accept loop")
+			return
+		default:
+			if err != nil {
+				fmt.Println("Failed to accept incoming connection: %v\n", err)
+				continue
+			}
+			fmt.Println("Accepted connection")
 
-        // Handle new connection in a goroutine
-        if (rr % num_workers == 1) {
-            go handleConnection(conn, conn1, maps)
-        } else {
-            go handleConnection(conn, conn2, maps)
-        }
-        rr += 1
+            // Handle new connection in a goroutine
+            if (rr % num_workers == 1) {
+                go handleConnection(conn, conn1, maps)
+            } else {
+                go handleConnection(conn, conn2, maps)
+            }
+            rr += 1
+		}
     }
+}
+
+func cleanup(conn1 net.Conn, conn2 net.Conn, maps common.Maps_fd) {
+    fmt.Println("Interrupt signal received! Terminating connections...")
+    /*****/
+    c1_remoteAddr := conn1.RemoteAddr().(*net.TCPAddr)
+    //c1_ip := c1_remoteAddr.IP.String()
+    c1_rem_port := C.uint(c1_remoteAddr.Port)
+
+    c1_localAddr := conn1.LocalAddr().(*net.TCPAddr)
+    c1_loc_port := C.uint(c1_localAddr.Port)
+
+    lo_ip := C.inet_addr(C.CString("0x7f000001"))
+    fmt.Println("lo_ip is: ", lo_ip)
+
+    c1 := C.struct_connection{
+        src_port: c1_rem_port,
+        dst_port: c1_loc_port,
+        src_ip: lo_ip,
+        dst_ip: lo_ip,
+    }
+    /*****/
+    fmt.Println("conn1 src: %d and dst %d", c1.src_port, c1.dst_port)
+    /*****/
+    c2_remoteAddr := conn2.RemoteAddr().(*net.TCPAddr)
+    //c2_ip := c2_remoteAddr.IP.String()
+    c2_rem_port := C.uint(c2_remoteAddr.Port)
+
+    c2_localAddr := conn2.LocalAddr().(*net.TCPAddr)
+    c2_loc_port := C.uint(c2_localAddr.Port)
+
+    c2 := C.struct_connection{
+        src_port: c2_rem_port,
+        dst_port: c2_loc_port,
+        src_ip: lo_ip,
+        dst_ip: lo_ip,
+    }
+    /*****/
+    fmt.Println("conn2 src: %d and dst %d", c2.src_port, c2.dst_port)
+    /*****/
 }
 
 func setUpWorkerConnections() (net.Conn, net.Conn, error) {

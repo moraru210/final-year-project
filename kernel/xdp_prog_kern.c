@@ -63,6 +63,15 @@ static inline __u16 l4_checksum(struct iphdr *iph, void *l4, void *data_end)
     return generic_checksum((unsigned short *) l4, data_end, csum, 1480);
 }
 
+static inline struct connection create_reverse_conn(struct connection *conn) {
+	struct connection rev_conn;
+	rev_conn.src_ip = conn->dst_ip;
+	rev_conn.dst_ip = conn->src_ip;
+	rev_conn.src_port = conn->dst_port;
+	rev_conn.dst_port = conn->src_port;
+	return rev_conn;
+}
+
 SEC("xdp_tcp")
 int  xdp_prog_tcp(struct xdp_md *ctx)
 {
@@ -118,7 +127,6 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 	if (tcph->rst && (conn.dst_port == 8080)) {
 		bpf_printk("LB received a RST from a client");
-
 		struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
 		struct numbers numbers_elem;
 		if (!numbers_elem_ptr) {
@@ -126,32 +134,49 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		} else {
 			bpf_printk("successfully found numbers elem in numbers map");
 			numbers_elem = *(numbers_elem_ptr);
-			
 			if (bpf_map_delete_elem(&numbers_map, &conn)) {
 				bpf_printk("unable to delete numbers from numbers map for conn");
 			}
-
 			tcph->seq = bpf_htonl(numbers_elem.init_seq);
 			tcph->ack_seq = bpf_htonl(numbers_elem.init_ack);
 
 			iph->check = 0;
 			iph->check = ~csum_reduce_helper(bpf_csum_diff(0, 0, (__be32 *)iph, sizeof(struct iphdr), 0));
-
 			tcph->check = 0;
 			tcph->check = l4_checksum(iph, tcph, data_end);
 		}
 
-		if (bpf_map_delete_elem(&conn_map, &conn)) {
-			bpf_printk("unable to delete connections from conn map");
+		struct connection *next_conn_ptr = bpf_map_lookup_elem(&conn_map, &conn);
+		if (!next_conn_ptr) {
+			bpf_printk("could not find value for conn in conn_map");
+		} else {
+			bpf_printk("successfully found value for conn in conn_map");
+			if (bpf_map_delete_elem(&conn_map, &conn)) {
+				bpf_printk("unable to delete connections from conn map");
+			}
+			struct connection next_conn = *(next_conn_ptr);
+			struct connection rev_next_conn = create_reverse_conn(&next_conn);
+			if (bpf_map_delete_elem(&conn_map, &rev_next_conn)) {
+				bpf_printk("unable to delete connections from conn map");
+			}			
 		}
-
+	
 		goto OUT;
 
-	} else if (conn.dst_port == 8080 || (conn.src_port == 4170 || conn.src_port == 4171)) {
+	} else if (conn.dst_port == 8080 || (conn.src_port == 4170 || conn.src_port == 4171) || (conn.dst_port == 4170 || conn.dst_port == 4171)) {
+		struct connection query_conn;
 		unsigned int seq_no = bpf_ntohl(tcph->seq);
-		unsigned int ack_no = bpf_ntohl(tcph->ack_seq);
-		
-		struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
+		unsigned int ack_no = bpf_ntohl(tcph->ack_seq);	
+
+		if ((conn.dst_port == 4170 || conn.dst_port == 4171)) {
+			query_conn = create_reverse_conn(&conn);
+			unsigned int temp = seq_no;
+			seq_no = ack_no;
+			ack_no = temp;
+		} else {
+			query_conn = conn;
+		}	
+		struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &query_conn);
 		struct numbers numbers_elem;
 		if (!numbers_elem_ptr) {
 			bpf_printk("could not find numbers elem in numbers map");
@@ -168,44 +193,8 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 		numbers_elem.seq_no = seq_no;
 		numbers_elem.ack_no = ack_no;
-
 		bpf_printk("before updating numbers map");
-		if (bpf_map_update_elem(&numbers_map, &conn, &numbers_elem, 0) < 0) {
-			bpf_printk("failed updating numbers map");
-			action = XDP_ABORTED;
-			goto OUT;
-		}
-		bpf_printk("successfully updated numbers map");
-	} else if ((conn.dst_port == 4170 || conn.dst_port == 4171)) {
-		struct connection rev_conn;
-		rev_conn.src_ip = conn.dst_ip;
-		rev_conn.dst_ip = conn.src_ip;
-		rev_conn.src_port = conn.dst_port;
-		rev_conn.dst_port = conn.src_port;
-
-		unsigned int seq_no = bpf_ntohl(tcph->ack_seq);
-		unsigned int ack_no = bpf_ntohl(tcph->seq);
-		
-		struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &rev_conn);
-		struct numbers numbers_elem;
-		if (!numbers_elem_ptr) {
-			bpf_printk("could not find numbers elem in numbers map");
-			numbers_elem.seq_offset = 0;
-			numbers_elem.ack_offset = 0;
-			numbers_elem.init_seq = 0;
-			numbers_elem.init_ack = 0;
-		} else {
-			bpf_printk("successfully found numbers elem in numbers map");
-			numbers_elem = *(numbers_elem_ptr);
-			seq_no = max(seq_no, numbers_elem.seq_no);
-			ack_no = max(ack_no, numbers_elem.ack_no);
-		}
-
-		numbers_elem.seq_no = seq_no;
-		numbers_elem.ack_no = ack_no;
-
-		bpf_printk("before updating numbers map");
-		if (bpf_map_update_elem(&numbers_map, &rev_conn, &numbers_elem, 0) < 0) {
+		if (bpf_map_update_elem(&numbers_map, &query_conn, &numbers_elem, 0) < 0) {
 			bpf_printk("failed updating numbers map");
 			action = XDP_ABORTED;
 			goto OUT;
@@ -223,7 +212,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 		struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
 		if (!numbers_elem_ptr) {
-			bpf_printk("could not find numbers elem in numers map");
+			bpf_printk("could not find numbers elem in numbers map");
 			action = XDP_ABORTED;
 			goto OUT;
 		}
@@ -235,14 +224,14 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		unsigned int cur_seq = bpf_ntohl(tcph->seq);
 		unsigned int cur_ack = bpf_ntohl(tcph->ack_seq);
 
-		tcph->source = bpf_htons(outgoing_conn.src_port);
-		tcph->dest = bpf_htons(outgoing_conn.dst_port);
 		unsigned int new_seq = cur_seq - seq_off;
 		tcph->seq = bpf_htonl(new_seq);
 		unsigned int new_ack_seq = cur_ack - ack_off; 
 		tcph->ack_seq = bpf_htonl(new_ack_seq);
 
-		//swap_src_dst_ipv4(iph);
+		tcph->source = bpf_htons(outgoing_conn.src_port);
+		tcph->dest = bpf_htons(outgoing_conn.dst_port);
+
 		iph->saddr = outgoing_conn.src_ip;
 		iph->daddr = outgoing_conn.dst_ip;
 		bpf_printk("modified ip addresses");

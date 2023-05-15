@@ -8,7 +8,7 @@ import (
 
 func main() {
 	// Connect to the netcat listener
-	conn, err := net.Dial("tcp", "localhost:8000")
+	conn, err := net.Dial("tcp", "localhost:8080")
 	if err != nil {
 		panic(err)
 	}

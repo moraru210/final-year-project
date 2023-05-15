@@ -10,4 +10,6 @@ struct numbers {
 	unsigned int ack_no;
 	signed int seq_offset;
 	signed int ack_offset;
+	unsigned int init_seq;
+	unsigned int init_ack;
 };

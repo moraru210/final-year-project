@@ -33,8 +33,17 @@ func main() {
 		panic(err)
 	}
 
+	time.Sleep(100 * time.Millisecond) // wait for connection to set
+
 	// Send a message
 	_, err = conn.Write([]byte("hello alex"))
+	if err != nil {
+		panic(err)
+	}
+	time.Sleep(100 * time.Millisecond) // wait for message to be sent
+
+	// Send a message
+	_, err = conn.Write([]byte("hello alex2"))
 	if err != nil {
 		panic(err)
 	}

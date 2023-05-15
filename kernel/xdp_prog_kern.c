@@ -100,7 +100,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	if (parse_tcphdr(&nh, data_end, &tcph) < 0) {
 		goto OUT;
 	}
-	bpf_printk("parsed TCP header");
+	bpf_printk("parsed tcphdr");
 
 	struct connection conn;
 	conn.src_port = bpf_ntohs(tcph->source);
@@ -108,7 +108,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	bpf_printk("tcp src port is %u and dst port is %u", conn.src_port, conn.dst_port);
 	conn.src_ip = iph->saddr;
 	conn.dst_ip = iph->daddr;
-	bpf_printk("ip before endian conversion s %u and d %u", iph->saddr, iph->daddr);
+	bpf_printk("ip before endian conversion src %u and dst %u", iph->saddr, iph->daddr);
 	bpf_printk("ip header saddr %u and daddr %u", conn.src_ip, conn.dst_ip);
 
 	// -> DIRECTION:
@@ -116,10 +116,37 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	// <- DIRECTION:
 	// IF SRC == 4170 OR SRC == 4171 
 
-	if (tcph->syn && (conn.dst_port != 8080 && conn.dst_port != 4170 && conn.dst_port != 4171 && conn.src_port != 8080 && conn.src_port != 4170 && conn.src_port != 4171)) {
-		bpf_printk("reset packet detected");
-		action = XDP_DROP;
+	if (tcph->rst && (conn.dst_port == 8080)) {
+		bpf_printk("LB received a RST from a client");
+
+		struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
+		struct numbers numbers_elem;
+		if (!numbers_elem_ptr) {
+			bpf_printk("could not find numbers elem in numbers map");
+		} else {
+			bpf_printk("successfully found numbers elem in numbers map");
+			numbers_elem = *(numbers_elem_ptr);
+			
+			if (bpf_map_delete_elem(&numbers_map, &conn)) {
+				bpf_printk("unable to delete numbers from numbers map for conn");
+			}
+
+			tcph->seq = bpf_htonl(numbers_elem.init_seq);
+			tcph->ack_seq = bpf_htonl(numbers_elem.init_ack);
+
+			iph->check = 0;
+			iph->check = ~csum_reduce_helper(bpf_csum_diff(0, 0, (__be32 *)iph, sizeof(struct iphdr), 0));
+
+			tcph->check = 0;
+			tcph->check = l4_checksum(iph, tcph, data_end);
+		}
+
+		if (bpf_map_delete_elem(&conn_map, &conn)) {
+			bpf_printk("unable to delete connections from conn map");
+		}
+
 		goto OUT;
+
 	} else if (conn.dst_port == 8080 || (conn.src_port == 4170 || conn.src_port == 4171)) {
 		unsigned int seq_no = bpf_ntohl(tcph->seq);
 		unsigned int ack_no = bpf_ntohl(tcph->ack_seq);
@@ -130,6 +157,8 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			bpf_printk("could not find numbers elem in numbers map");
 			numbers_elem.seq_offset = 0;
 			numbers_elem.ack_offset = 0;
+			numbers_elem.init_seq = 0;
+			numbers_elem.init_ack = 0;
 		} else {
 			bpf_printk("successfully found numbers elem in numbers map");
 			numbers_elem = *(numbers_elem_ptr);
@@ -163,6 +192,8 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			bpf_printk("could not find numbers elem in numbers map");
 			numbers_elem.seq_offset = 0;
 			numbers_elem.ack_offset = 0;
+			numbers_elem.init_seq = 0;
+			numbers_elem.init_ack = 0;
 		} else {
 			bpf_printk("successfully found numbers elem in numbers map");
 			numbers_elem = *(numbers_elem_ptr);
@@ -215,7 +246,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		iph->saddr = outgoing_conn.src_ip;
 		iph->daddr = outgoing_conn.dst_ip;
 		bpf_printk("modified ip addresses");
-		bpf_printk("ip header saddr %u and daddr %u", outgoing_conn.src_ip, outgoing_conn.dst_ip);
+		bpf_printk("modified ip header saddr %u and daddr %u", outgoing_conn.src_ip, outgoing_conn.dst_ip);
 
 		swap_src_dst_mac(ethh);
 		bpf_printk("Swapped eth addresses");

@@ -253,6 +253,8 @@ func handleConnection(conn net.Conn, conn_w net.Conn, maps common.Maps_fd) {
         ack_no: C.uint(0),
         seq_offset: C.int(0),
         ack_offset: C.int(0),
+        init_seq: C.uint(0),
+        init_ack: C.uint(0),
     }
     err := bpf.LookupElement(maps.Numbers_map, unsafe.Pointer(&client_c), unsafe.Pointer(&c_numbers))
     if (err != nil) {
@@ -267,6 +269,8 @@ func handleConnection(conn net.Conn, conn_w net.Conn, maps common.Maps_fd) {
         ack_no: C.uint(0),
         seq_offset: C.int(0),
         ack_offset: C.int(0),
+        init_seq: C.uint(0),
+        init_ack: C.uint(0),
     }
     err = bpf.LookupElement(maps.Numbers_map, unsafe.Pointer(&worker_c), unsafe.Pointer(&w_numbers))
     if (err != nil) {
@@ -284,6 +288,12 @@ func handleConnection(conn net.Conn, conn_w net.Conn, maps common.Maps_fd) {
 
     c_numbers.seq_offset = seq_off
     c_numbers.ack_offset = ack_off
+
+    /* Update init seq and ack numbers */
+    c_numbers.init_seq = c_numbers.seq_no
+    c_numbers.init_ack = c_numbers.ack_no
+    w_numbers.init_seq = w_numbers.seq_no
+    w_numbers.init_ack = w_numbers.ack_no
 
     err = bpf.UpdateElement(maps.Numbers_map, "Numbers_map", unsafe.Pointer(&client_c), unsafe.Pointer(&c_numbers), bpf.BPF_ANY)
     if (err != nil) {

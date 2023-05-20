@@ -14,10 +14,13 @@
     _a > _b ? _a : _b;       \
 })
 
+#define MIN_SERVER_PORT 4171
+#define MAX_SERVER_PORT (4170+MAX_CLIENTS) 
+
 struct bpf_map_def SEC("maps") conn_map = {
 	.type        = BPF_MAP_TYPE_HASH,
 	.key_size    = sizeof(struct connection),
-	.value_size  = sizeof(struct connection),
+	.value_size  = sizeof(struct reroute),
 	.max_entries = 20,
 };
 
@@ -25,6 +28,13 @@ struct bpf_map_def SEC("maps") numbers_map = {
 	.type        = BPF_MAP_TYPE_HASH,
 	.key_size    = sizeof(struct connection),
 	.value_size  = sizeof(struct numbers),
+	.max_entries = 20,
+};
+
+struct bpf_map_def SEC("maps") available_map = {
+	.type        = BPF_MAP_TYPE_HASH,
+	.key_size    = sizeof(struct server),
+	.value_size  = sizeof(struct availability),
 	.max_entries = 20,
 };
 
@@ -63,7 +73,42 @@ static inline __u16 l4_checksum(struct iphdr *iph, void *l4, void *data_end)
     return generic_checksum((unsigned short *) l4, data_end, csum, 1480);
 }
 
-static inline struct connection create_reverse_conn(struct connection *conn) {
+static inline int from_server(struct connection *conn)
+{
+	if (conn->src_port >= MIN_SERVER_PORT 
+		&& conn->src_port <= MAX_SERVER_PORT) {
+			return 1;
+		}
+	return 0;
+}
+
+static inline int from_client(struct connection *conn)
+{
+	if (conn->dst_port == LB_LISTENER_PORT) {
+			return 1;
+	}
+	return 0;
+}
+
+static inline int to_server(struct connection *conn)
+{
+	if (conn->dst_port >= MIN_SERVER_PORT 
+		&& conn->dst_port <= MAX_SERVER_PORT) {
+			return 1;
+		}
+	return 0;
+}
+
+static inline int to_client(struct connection *conn)
+{
+	if (conn->src_port == LB_LISTENER_PORT) {
+			return 1;
+	}
+	return 0;
+}
+
+static inline struct connection create_reverse_conn(struct connection *conn) 
+{
 	struct connection rev_conn;
 	rev_conn.src_ip = conn->dst_ip;
 	rev_conn.dst_ip = conn->src_ip;
@@ -87,7 +132,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	nh.pos = data;
 
 	bpf_printk("*** start of a new packet ***");
-
+	// Begin initial checks
 	eth_type = parse_ethhdr(&nh, data_end, &ethh);
 	if (eth_type < 0) {
 		goto OUT;
@@ -110,6 +155,59 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		goto OUT;
 	}
 	bpf_printk("parsed tcphdr");
+	// Complete initial checks
+
+	// Numbers map will store keys: C1->LB, LB->W1
+	//	
+	//	for every packet (from/to servers/clients)
+	//		retrieve numbers kv pair
+	//		retrieve seq and ack_seq from current packet
+	//		update the numbers kv.value to have update seq and ack_seq values
+	//		place updated kv back to the numbers_map
+	//
+	//  if needs to reroute
+	//  	if rst and from client
+	//			grab client_numbers from numbers_map (key is client_conn)
+	//			grab server_numbers from numbers_map (key is reroute.original)
+	//			set packet.seq/ack to client_numbers.init_seq/ack
+	//			delete client_numbers from numbers_map
+	//			delete client_conn from conn_map
+	//			grab the availability struct for reroute.original_conn.dst_port/ip key
+	//			set availability.valid[pos(reroute.original_conn)] = true
+	//
+	//  	if from_client and reroute.rematch_flag is true and reroute.state is true
+	//			grab the availability struct for reroute.original_conn.dst_port/ip key
+	//			set availability.valid[pos(reroute.original_conn)] = true
+	//			set reroute.original = reroute.new
+	// 			set reroute.rematch = 0
+	//			set reroute.state = 0
+	//			update conn_map to have update reroute	
+	//			grab reroute_numbers for rev(reroute.new) conn
+	//			grab client_numbers for client_conn
+	//			client_numbers.seq_offset = client_numbers.seq_no - reroute_numbers.ack_no
+	//			client_numbers.ack_offset = client_numbers.ack_no - reroute_numbers.seq_no
+	//			reroute_numbers.seq_offset = reroute_numbers.seq_no - client_numbers.ack_no
+	//			reroute_numbers.ack_offset = reroute_numbers.ack_no - client_numbers.seq_no
+	//			update numbers_map to contain the updated client_numbers for client_conn
+	//			update numbers_map to contain the updated reroute_numbers for rev(reroute.new)
+	//			use client_numbers to alter seq and ack correspondingly
+	//			
+	//		if from_server and reroute.state is false
+	//			set reroute.state to true
+	//			update conn_map to have updated reroute
+	//			continue with offsets like normal
+	//
+	//		if from_client and reroute.state is true and reroute.rematch_flag is false
+	//			set reroute.state to false
+	//			update conn_map to have updated reroute
+	//			continue with offsets like normal
+	//		
+	//		change seq and ack_seq accordingly
+	//		change src and dst port accordingly	
+	//		perform tcp checksum
+	//		perform ipv4 checksum
+	//		action = XDP_TX
+	//		
 
 	struct connection conn;
 	conn.src_port = bpf_ntohs(tcph->source);
@@ -119,11 +217,6 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	conn.dst_ip = iph->daddr;
 	bpf_printk("ip before endian conversion src %u and dst %u", iph->saddr, iph->daddr);
 	bpf_printk("ip header saddr %u and daddr %u", conn.src_ip, conn.dst_ip);
-
-	// -> DIRECTION:
-	// IF DST == 8080 OR DST == 4170 OR DST == 4171
-	// <- DIRECTION:
-	// IF SRC == 4170 OR SRC == 4171 
 
 	if (tcph->rst && (conn.dst_port == 8080)) {
 		bpf_printk("LB received a RST from a client");

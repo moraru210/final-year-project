@@ -73,6 +73,14 @@ static inline __u16 l4_checksum(struct iphdr *iph, void *l4, void *data_end)
     return generic_checksum((unsigned short *) l4, data_end, csum, 1480);
 }
 
+static inline void perform_checksums(struct tcphdr *tcph, struct iphdr *iph, void *data_end)
+{
+	iph->check = 0;
+	iph->check = ~csum_reduce_helper(bpf_csum_diff(0, 0, (__be32 *)iph, sizeof(struct iphdr), 0));
+	tcph->check = 0;
+	tcph->check = l4_checksum(iph, tcph, data_end);
+}
+
 static inline int from_server(struct connection *conn)
 {
 	if (conn->src_port >= MIN_SERVER_PORT 
@@ -117,6 +125,28 @@ static inline struct connection create_reverse_conn(struct connection *conn)
 	return rev_conn;
 }
 
+static inline struct connection create_conn_struct(struct tcphdr **tcph, struct iphdr **iph)
+{
+	struct connection conn;
+	conn.src_port = bpf_ntohs((*tcph)->source);
+	conn.dst_port = bpf_ntohs((*tcph)->dest);
+	bpf_printk("tcp src port is %u and dst port is %u", conn.src_port, conn.dst_port);
+	conn.src_ip = (*iph)->saddr;
+	conn.dst_ip = (*iph)->daddr;
+	bpf_printk("ip before endian conversion src %u and dst %u", (*iph)->saddr, (*iph)->daddr);
+	bpf_printk("ip header saddr %u and daddr %u", conn.src_ip, conn.dst_ip);
+	return conn;
+}
+
+static inline struct server create_server_struct(struct connection *conn)
+{
+	// This function assumes the server is at the destination of the input connection
+	struct server server;
+	server.port = conn->dst_port;
+	server.ip = conn->dst_ip;
+	return server
+}
+
 SEC("xdp_tcp")
 int  xdp_prog_tcp(struct xdp_md *ctx)
 {
@@ -157,7 +187,8 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	bpf_printk("parsed tcphdr");
 	// Complete initial checks
 
-	// Numbers map will store keys: C1->LB, LB->W1
+	// Numbers map will store keys: C1->LB, W1->LB
+	// This is due to ease of quickly grabbing and applying offset on majority of packet cases
 	//	
 	//	for every packet (from/to servers/clients)
 	//		retrieve numbers kv pair
@@ -167,11 +198,12 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	//
 	//  if needs to reroute
 	//  	if rst and from client
-	//			grab client_numbers from numbers_map (key is client_conn)
-	//			grab server_numbers from numbers_map (key is reroute.original)
+	//			grab client_numbers from numbers_map (key is client_conn) (done)
+	//			grab server_numbers from numbers_map (key is reroute.original) (not needed?)
 	//			set packet.seq/ack to client_numbers.init_seq/ack
 	//			delete client_numbers from numbers_map
 	//			delete client_conn from conn_map
+	//			delete original_conn from conn_map
 	//			grab the availability struct for reroute.original_conn.dst_port/ip key
 	//			set availability.valid[pos(reroute.original_conn)] = true
 	//
@@ -209,54 +241,10 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	//		action = XDP_TX
 	//		
 
-	struct connection conn;
-	conn.src_port = bpf_ntohs(tcph->source);
-	conn.dst_port = bpf_ntohs(tcph->dest);
-	bpf_printk("tcp src port is %u and dst port is %u", conn.src_port, conn.dst_port);
-	conn.src_ip = iph->saddr;
-	conn.dst_ip = iph->daddr;
-	bpf_printk("ip before endian conversion src %u and dst %u", iph->saddr, iph->daddr);
-	bpf_printk("ip header saddr %u and daddr %u", conn.src_ip, conn.dst_ip);
+	// create connection struct using header information
+	struct connection conn = create_conn_struct(&tcph, &iph);
 
-	if (tcph->rst && (conn.dst_port == 8080)) {
-		bpf_printk("LB received a RST from a client");
-		struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
-		struct numbers numbers_elem;
-		if (!numbers_elem_ptr) {
-			bpf_printk("could not find numbers elem in numbers map");
-		} else {
-			bpf_printk("successfully found numbers elem in numbers map");
-			numbers_elem = *(numbers_elem_ptr);
-			if (bpf_map_delete_elem(&numbers_map, &conn)) {
-				bpf_printk("unable to delete numbers from numbers map for conn");
-			}
-			tcph->seq = bpf_htonl(numbers_elem.init_seq);
-			tcph->ack_seq = bpf_htonl(numbers_elem.init_ack);
-
-			iph->check = 0;
-			iph->check = ~csum_reduce_helper(bpf_csum_diff(0, 0, (__be32 *)iph, sizeof(struct iphdr), 0));
-			tcph->check = 0;
-			tcph->check = l4_checksum(iph, tcph, data_end);
-		}
-
-		struct connection *next_conn_ptr = bpf_map_lookup_elem(&conn_map, &conn);
-		if (!next_conn_ptr) {
-			bpf_printk("could not find value for conn in conn_map");
-		} else {
-			bpf_printk("successfully found value for conn in conn_map");
-			if (bpf_map_delete_elem(&conn_map, &conn)) {
-				bpf_printk("unable to delete connections from conn map");
-			}
-			struct connection next_conn = *(next_conn_ptr);
-			struct connection rev_next_conn = create_reverse_conn(&next_conn);
-			if (bpf_map_delete_elem(&conn_map, &rev_next_conn)) {
-				bpf_printk("unable to delete connections from conn map");
-			}			
-		}
-	
-		goto OUT;
-
-	} else if (conn.dst_port == 8080 || (conn.src_port == 4170 || conn.src_port == 4171) || (conn.dst_port == 4170 || conn.dst_port == 4171)) {
+	if (conn.dst_port == 8080 || (conn.src_port == 4170 || conn.src_port == 4171) || (conn.dst_port == 4170 || conn.dst_port == 4171)) {
 		struct connection query_conn;
 		unsigned int seq_no = bpf_ntohl(tcph->seq);
 		unsigned int ack_no = bpf_ntohl(tcph->ack_seq);	
@@ -295,13 +283,72 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		bpf_printk("successfully updated numbers map");
 	}
 
-	struct connection *outgoing_conn_ptr = bpf_map_lookup_elem(&conn_map, &conn);
-	if (!outgoing_conn_ptr) {
+	struct reroute *reroute_ptr = bpf_map_lookup_elem(&conn_map, &conn);
+	if (!reroute_ptr) {
 		bpf_printk("could not query conn_map for rerouting");
 		goto OUT;
 	} else {
-		bpf_printk("found connection to rerouter to");
-		struct connection outgoing_conn = *(outgoing_conn_ptr);
+		bpf_printk("Found a reroute");
+		struct reroute reroute = *(reroute_ptr);
+
+		if (tcph->rst && from_client(&conn)) {
+			bpf_printk("Reroute packet received is a RST from a client");
+			struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
+			struct numbers numbers_elem;
+			if (!numbers_elem_ptr) {
+				bpf_printk("could not find numbers elem in numbers map");
+				bpf_printk("ABORT PACKET");
+				action = XDP_ABORTED;
+				goto OUT;
+			} else {
+				bpf_printk("successfully found numbers elem in numbers map");
+				numbers_elem = *(numbers_elem_ptr);
+				if (bpf_map_delete_elem(&numbers_map, &conn)) {
+					bpf_printk("unable to delete numbers from numbers map for conn");
+				}
+				tcph->seq = bpf_htonl(numbers_elem.init_seq);
+				tcph->ack_seq = bpf_htonl(numbers_elem.init_ack);
+
+				perform_checksums(tcph, iph, data_end);
+			}
+
+			struct connection original_conn = reroute.original_conn;
+
+			//create the worker struct
+			//grab avaialability from available map
+			//set valid[reroute.index] = 0
+			struct server server = create_server_struct(&original_conn);
+			struct avaialbility *availability_ptr = bpf_map_lookup_elem(&available_map, &server);
+			if (!availability_ptr) {
+				bpf_printk("could not find avaialability in order to invalidate reroute.original");
+			} else {
+				struct availability availability = *(availability_ptr);
+				unsigned int index = reroute.original_index;
+				unsigned int max_size = sizeof(availability.conns) / sizeof(availability.conns[0]);
+				if (index >= max_size) {
+					bpf_printk("index is larger than valid array in avaialability");
+					bpf_printk("index: %u", index);
+					bpf_printk("ABORT PACKET");
+					action = XDP_ABORTED;
+					goto OUT;
+				} else {
+					availability.valid[index] = 0;
+				}
+			}
+
+
+			bpf_printk("successfully found value for conn in conn_map");
+			if (bpf_map_delete_elem(&conn_map, &conn)) {
+				bpf_printk("unable to delete client_conn from conn map");
+			}
+
+			struct connection rev_original_conn = create_reverse_conn(&original_conn);
+			if (bpf_map_delete_elem(&conn_map, &rev_original_conn)) {
+				bpf_printk("unable to delete rev(original_conn) from conn map");
+			}			
+		
+			goto OUT;
+		}
 
 		struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
 		if (!numbers_elem_ptr) {

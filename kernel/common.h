@@ -10,8 +10,10 @@ struct connection {
 
 struct reroute {
 	struct connection original_conn;
+	unsigned int original_index;
 	unsigned int rematch_flag;
 	struct connection new_conn;
+	unsigned int new_index;
 	unsigned int state;
 };
 

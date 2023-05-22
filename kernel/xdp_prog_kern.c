@@ -106,14 +106,14 @@ static inline int from_client(struct connection *conn)
 	return 0;
 }
 
-// static inline int to_server(struct connection *conn)
-// {
-// 	if (conn->dst_port >= MIN_SERVER_PORT 
-// 		&& conn->dst_port <= MAX_SERVER_PORT) {
-// 			return 1;
-// 		}
-// 	return 0;
-// }
+static inline int to_server(struct connection *conn)
+{
+	if (conn->dst_port >= MIN_SERVER_PORT 
+		&& conn->dst_port <= MAX_SERVER_PORT) {
+			return 1;
+		}
+	return 0;
+}
 
 // static inline int to_client(struct connection *conn)
 // {
@@ -263,12 +263,12 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	// create connection struct using header information
 	struct connection conn = create_conn_struct(&tcph, &iph);
 
-	if (conn.dst_port == 8080 || (conn.src_port == 4170 || conn.src_port == 4171) || (conn.dst_port == 4170 || conn.dst_port == 4171)) {
+	if (from_client(&conn) || from_server(&conn) || to_server(&conn)) {
 		struct connection query_conn;
 		unsigned int seq_no = bpf_ntohl(tcph->seq);
 		unsigned int ack_no = bpf_ntohl(tcph->ack_seq);	
 
-		if ((conn.dst_port == 4170 || conn.dst_port == 4171)) {
+		if (to_server(&conn)) {
 			query_conn = create_reverse_conn(&conn);
 			unsigned int temp = seq_no;
 			seq_no = ack_no;
@@ -367,25 +367,28 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		
 			goto OUT;
 		}
-
-		unsigned int state = 2;
+		
+		unsigned int *state_ptr;
 		if (from_client(&conn)) {
-			unsigned int *state = bpf_map_lookup_elem(&state_map, &conn.src_port);
-			if (!state) {
+			state_ptr = bpf_map_lookup_elem(&state_map, &conn.src_port);
+			if (!state_ptr) {
 				bpf_printk("Unable to find state from client_conn");
 				action = XDP_ABORTED;
 				goto OUT;
 			}
 		} else if (from_server(&conn)) {
-			unsigned int *state = bpf_map_lookup_elem(&state_map, &reroute.original_conn.dst_port);
-			if (!state) {
+			state_ptr = bpf_map_lookup_elem(&state_map, &reroute.original_conn.dst_port);
+			if (!state_ptr) {
 				bpf_printk("Unable to find state from client_conn");
 				action = XDP_ABORTED;
 				goto OUT;
 			}
 		} else {
 			bpf_printk("Reroute is not from server nor client, which should be impossible");
+			action = XDP_ABORTED;
+			goto OUT;
 		}
+		unsigned int state = *(state_ptr);
 
 		struct numbers *numbers_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
 		if (!numbers_ptr) {
@@ -423,15 +426,16 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				bpf_printk("Unable to change state back to 0");
 			}
 
-			if (bpf_map_update_elem(&conn_map, &conn, &reroute.original_conn, 0) < 0) {
+			if (bpf_map_update_elem(&conn_map, &conn, &reroute, 0) < 0) {
 				bpf_printk("Unable to change reroute when rematching");
 			}
 
+			//ASSUMPTION: WHEN USERSPACE REMATCHES, IT ALREADY ADDS THIS
 			struct connection rev_server = create_reverse_conn(&reroute.original_conn);
-			struct connection rev_client = create_reverse_conn(&conn);
-			if (bpf_map_update_elem(&conn_map, &rev_server, &rev_client, 0) < 0) {
-				bpf_printk("Unable to change reroute when rematching");
-			}
+			// struct connection rev_client = create_reverse_conn(&conn);
+			// if (bpf_map_update_elem(&conn_map, &rev_server, &rev_client, 0) < 0) {
+			// 	bpf_printk("Unable to change reroute when rematching");
+			// }
 
 			struct numbers *server_numbers_ptr = bpf_map_lookup_elem(&numbers_map, &rev_server);
 			if (!server_numbers_ptr) {

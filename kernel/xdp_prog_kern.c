@@ -38,6 +38,14 @@ struct bpf_map_def SEC("maps") available_map = {
 	.max_entries = 20,
 };
 
+struct bpf_map_def SEC("maps") state_map = {
+	.type        = BPF_MAP_TYPE_HASH,
+	.key_size    = sizeof(unsigned int),
+	.value_size  = sizeof(unsigned int),
+	.max_entries = 20,
+};
+
+
 static __always_inline __u16 csum_reduce_helper(__u32 csum)
 {
 	csum = ((csum & 0xffff0000) >> 16) + (csum & 0xffff);
@@ -358,7 +366,26 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			}			
 		
 			goto OUT;
-		} 
+		}
+
+		unsigned int state = 2;
+		if (from_client(&conn)) {
+			unsigned int *state = bpf_map_lookup_elem(&state_map, &conn.src_port);
+			if (!state) {
+				bpf_printk("Unable to find state from client_conn");
+				action = XDP_ABORTED;
+				goto OUT;
+			}
+		} else if (from_server(&conn)) {
+			unsigned int *state = bpf_map_lookup_elem(&state_map, &reroute.original_conn.dst_port);
+			if (!state) {
+				bpf_printk("Unable to find state from client_conn");
+				action = XDP_ABORTED;
+				goto OUT;
+			}
+		} else {
+			bpf_printk("Reroute is not from server nor client, which should be impossible");
+		}
 
 		struct numbers *numbers_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
 		if (!numbers_ptr) {
@@ -367,7 +394,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			goto OUT;
 		}
 		
-		if (from_client(&conn) && reroute.rematch_flag && reroute.state) {
+		if (from_client(&conn) && reroute.rematch_flag && state) {
 			struct connection original_conn = reroute.original_conn;
 			struct server server = create_server_struct(&original_conn);
 			struct availability *availability_ptr = bpf_map_lookup_elem(&available_map, &server);
@@ -390,7 +417,11 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			reroute.original_conn = reroute.new_conn;
 			reroute.rematch_flag = 0;
 			reroute.original_index = reroute.new_index;
-			reroute.state = 0;
+			
+			unsigned int zero = 0;
+			if (bpf_map_update_elem(&state_map, &conn.src_port, &zero, 0) < 0) {
+				bpf_printk("Unable to change state back to 0");
+			}
 
 			if (bpf_map_update_elem(&conn_map, &conn, &reroute.original_conn, 0) < 0) {
 				bpf_printk("Unable to change reroute when rematching");
@@ -423,14 +454,22 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				bpf_printk("Could not update map with updated client_numbers offsets");
 			}
 
-		} else if (from_server(&conn) && !reroute.state) {
-			reroute.state = 1;
+		} else if (from_server(&conn) && !state) {
+			unsigned int one = 1;
+			if (bpf_map_update_elem(&state_map, &conn.src_port, &one, 0) < 0) {
+				bpf_printk("Unable to change state back to 0");
+			}
+
 			if (bpf_map_update_elem(&conn_map, &conn, &reroute, 0) < 0) {
 				bpf_printk("Failed to update conn_map with updated reroute.state (0->1)");
 			}
 
-		} else if (from_client(&conn) && reroute.state && !reroute.rematch_flag) {
-			reroute.state = 0;
+		} else if (from_client(&conn) && state && !reroute.rematch_flag) {
+			unsigned int zero = 0;
+			if (bpf_map_update_elem(&state_map, &conn.src_port, &zero, 0) < 0) {
+				bpf_printk("Unable to change state back to 0");
+			}
+
 			if (bpf_map_update_elem(&conn_map, &conn, &reroute, 0) < 0) {
 				bpf_printk("Failed to update conn_map with updated reroute.state (1->0)");
 			}

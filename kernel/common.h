@@ -14,7 +14,6 @@ struct reroute {
 	unsigned int rematch_flag;
 	struct connection new_conn;
 	unsigned int new_index;
-	unsigned int state;
 };
 
 struct numbers {

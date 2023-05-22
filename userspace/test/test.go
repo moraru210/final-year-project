@@ -57,8 +57,8 @@ type Server struct {
 }
 
 type Availability struct {
-	Conns []Connection
-	Valid []uint32
+	Conns [2]Connection
+	Valid [2]uint32
 }
 
 func main() {
@@ -107,10 +107,11 @@ func main() {
 	defer state_map.Close()
 
 	// Set up servers
+	fmt.Printf("reached this section\n")
 	setUpServerConnections(no_workers, no_clients, available_map)
 
 	// Set up listener for clients
-	go startLB(no_workers, available_map, conn_map, state_map, numbers_map)
+	startLB(no_workers, available_map, conn_map, state_map, numbers_map)
 }
 
 func startLB(no_workers int, available_map *ebpf.Map, conn_map *ebpf.Map, state_map *ebpf.Map, numbers_map *ebpf.Map) {
@@ -150,6 +151,7 @@ func setInitialOffsets(client_conn Connection, server_conn Connection, numbers_m
 	grabNumbersForConns(client_conn, server_conn, numbers_map, client_n, server_n)
 	if client_n == nil || server_n == nil {
 		fmt.Printf("client_n or server_n returned as nil, hence exit setInitialOffests\n")
+		return
 	}
 
 	calculateAndUpdateOffsets(client_conn, server_conn, numbers_map, *client_n, *server_n)
@@ -163,11 +165,12 @@ func calculateAndUpdateOffsets(client_conn Connection, server_conn Connection, n
 	server_n.Ack_offset = int32(server_n.Ack_no - client_n.Seq_no)
 
 	if err := numbers_map.Put(client_conn, client_n); err != nil {
-
+		fmt.Printf("Not able to include offsets in client_numbers to numbers_map: %v\n", err)
 	}
 
-	if err := numbers_map.Put(server_conn, server_n); err != nil {
-
+	rev_server := reverseConn(server_conn)
+	if err := numbers_map.Put(rev_server, server_n); err != nil {
+		fmt.Printf("Not able to include offsets in server_numbers to numbers_map: %v\n", err)
 	}
 }
 
@@ -263,7 +266,8 @@ func setUpServerConnections(no_workers int, no_clients int, available_map *ebpf.
 	for i := 1; i <= no_workers; i++ {
 		for j := 0; j < no_clients; j++ {
 
-			conn_dest := fmt.Sprintf("locahost:417%d", i)
+			conn_dest := fmt.Sprintf("localhost:417%d", i)
+			fmt.Println(conn_dest)
 			conn, err := net.Dial("tcp", conn_dest)
 			if err != nil {
 				// Handle the error appropriately
@@ -275,6 +279,7 @@ func setUpServerConnections(no_workers int, no_clients int, available_map *ebpf.
 			insertToAvailableMap(conn, available_map, j, no_workers)
 		}
 	}
+	fmt.Println("Completed setting up server connections")
 }
 
 func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_workers int) {
@@ -291,20 +296,21 @@ func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_
 	var availability Availability
 	if index == 0 {
 		availability = Availability{
-			Conns: make([]Connection, no_workers),
-			Valid: make([]uint32, no_workers),
+			Conns: [2]Connection{},
+			Valid: [2]uint32{},
 		}
 	} else {
-		if err := available_map.Lookup(connStruct, &availability); err != nil {
+		if err := available_map.Lookup(server, &availability); err != nil {
 			fmt.Printf("not able to find avaialability for connStruct with src_p %d and dst_p %d\n", connStruct.Src_port, connStruct.Dst_port)
 		}
 	}
+	fmt.Printf("len of availability arrays: %d\n", len(availability.Conns))
 	availability.Conns[index] = connStruct
-	availability.Valid[index] = 0
+	availability.Valid[index] = uint32(0)
 
 	// Put into bpf map
 	if err := available_map.Put(server, availability); err != nil {
-		fmt.Printf("Could not insert Conn.src %d Conn.dst %d into Available_map\n", connStruct.Src_port, connStruct.Dst_port)
+		fmt.Printf("Could not insert Conn.src %d Conn.dst %d into Available_map: %v\n", connStruct.Src_port, connStruct.Dst_port, err)
 	}
 }
 

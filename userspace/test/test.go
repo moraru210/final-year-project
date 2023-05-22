@@ -58,7 +58,7 @@ type Server struct {
 
 type Availability struct {
 	Conns [2]Connection
-	Valid [2]uint32
+	Valid [2]uint32 //signifies that is in use if 1
 }
 
 func main() {
@@ -144,17 +144,13 @@ func startLB(no_workers int, available_map *ebpf.Map, conn_map *ebpf.Map, state_
 }
 
 func setInitialOffsets(client_conn Connection, server_conn Connection, numbers_map *ebpf.Map) {
-	var (
-		client_n *Numbers
-		server_n *Numbers
-	)
-	grabNumbersForConns(client_conn, server_conn, numbers_map, client_n, server_n)
-	if client_n == nil || server_n == nil {
+	client_n, server_n, err := grabNumbersForConns(client_conn, server_conn, numbers_map)
+	if err != nil {
 		fmt.Printf("client_n or server_n returned as nil, hence exit setInitialOffests\n")
 		return
 	}
 
-	calculateAndUpdateOffsets(client_conn, server_conn, numbers_map, *client_n, *server_n)
+	calculateAndUpdateOffsets(client_conn, server_conn, numbers_map, client_n, server_n)
 }
 
 func calculateAndUpdateOffsets(client_conn Connection, server_conn Connection, numbers_map *ebpf.Map, client_n Numbers, server_n Numbers) {
@@ -174,16 +170,24 @@ func calculateAndUpdateOffsets(client_conn Connection, server_conn Connection, n
 	}
 }
 
-func grabNumbersForConns(client_conn Connection, server_conn Connection, numbers_map *ebpf.Map, client_n *Numbers, server_n *Numbers) {
-	if err := numbers_map.Lookup(client_conn, client_n); err != nil {
+func grabNumbersForConns(client_conn Connection, server_conn Connection, numbers_map *ebpf.Map) (Numbers, Numbers, error) {
+	var client_n Numbers
+	var server_n Numbers
+
+	err := numbers_map.Lookup(client_conn, &client_n)
+	if err != nil {
 		fmt.Printf("Initial Offsets: unable to retrieve numbers for client_conn\n")
-		return
+	} else {
+		fmt.Printf("server.SrcPort is  %d server.DstPort is %d\n", server_conn.Src_port, server_conn.Dst_port)
+		rev_server := reverseConn(server_conn)
+		fmt.Printf("rev_server.SrcPort is  %d rev_server.DstPort is %d\n", rev_server.Src_port, rev_server.Dst_port)
+		err = numbers_map.Lookup(rev_server, &server_n)
+		if err != nil {
+			fmt.Printf("Initial Offsets: unable to retrieve numbers for server_conn: %v\n", err)
+		}
 	}
 
-	rev_server := reverseConn(server_conn)
-	if err := numbers_map.Lookup(rev_server, server_n); err != nil {
-		fmt.Printf("Initial Offsets: unable to retrieve numbers for client_conn\n")
-	}
+	return client_n, server_n, err
 }
 
 func insertToStateMap(client_port uint32, state uint32, state_map *ebpf.Map) {
@@ -195,6 +199,7 @@ func insertToStateMap(client_port uint32, state uint32, state_map *ebpf.Map) {
 func insertToConnMap(client_conn Connection, server_conn Connection, conn_map *ebpf.Map, index int) {
 	reroute := Reroute{
 		Original_conn:  server_conn,
+		Rematch_flag:   uint32(0),
 		Original_index: uint32(index),
 		New_conn:       server_conn,
 		New_index:      uint32(index),
@@ -209,6 +214,7 @@ func insertToConnMap(client_conn Connection, server_conn Connection, conn_map *e
 
 	rev_reroute := Reroute{
 		Original_conn:  rev_client,
+		Rematch_flag:   uint32(0),
 		Original_index: uint32(0),
 		New_conn:       rev_client,
 		New_index:      uint32(0),
@@ -224,6 +230,7 @@ func startListener() net.Listener {
 		fmt.Println("Error listening:", err.Error())
 		return nil
 	}
+
 	return ln
 }
 
@@ -233,12 +240,23 @@ func acceptConnection(ln net.Listener) net.Conn {
 		fmt.Printf("Failed to accept incoming connection: %v\n", err)
 		return nil
 	}
+
+	// Disable TCP keep-alive on the accepted connection
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(false)
+		tcpConn.SetKeepAlivePeriod(0) // Optionally set keep-alive period to 0 to disable periodic probes
+	}
+
 	fmt.Println("Accepted connection")
 	return conn
 }
 
 func chooseServerConn(no_workers int, available_map *ebpf.Map) (*Connection, int) {
-	chosen_server := first_server_no + (round_robin % no_workers)
+	chosen_server_port := first_server_no + (round_robin % no_workers)
+	chosen_server := Server{
+		Port: uint32(chosen_server_port),
+		Ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
+	}
 	var availability Availability
 	if err := available_map.Lookup(chosen_server, &availability); err != nil {
 		fmt.Printf("Failed to lookup availability from map for client conn: %v\n", err)
@@ -248,14 +266,16 @@ func chooseServerConn(no_workers int, available_map *ebpf.Map) (*Connection, int
 	conn_ptr, index := findAvailableConn(availability)
 	if conn_ptr == nil {
 		fmt.Printf("Unable to find a valid connection in availability struct\n")
+		return nil, -1
 	}
+
 	return conn_ptr, index
 }
 
 func findAvailableConn(availability Availability) (*Connection, int) {
 	for i, conn := range availability.Conns {
-		if availability.Valid[i] == 1 {
-			availability.Valid[i] = 0
+		if availability.Valid[i] == 0 {
+			availability.Valid[i] = 1
 			return &conn, i
 		}
 	}
@@ -274,6 +294,11 @@ func setUpServerConnections(no_workers int, no_clients int, available_map *ebpf.
 				fmt.Printf("<i: %d, j: %d> Failed to connect to localhost:417%d: %v\n", i, j, i, err)
 			}
 
+			// Disable TCP keep-alive
+			if tcpConn, ok := conn.(*net.TCPConn); ok {
+				tcpConn.SetKeepAlive(false)
+			}
+
 			// Insert this new connection to available map
 			// Conn in this instance is localP: X, remoteP: 417Y
 			insertToAvailableMap(conn, available_map, j, no_workers)
@@ -290,6 +315,7 @@ func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_
 		Port: uint32(remAddr.Port),
 		Ip:   lo_ip,
 	}
+	fmt.Printf("Server key for available_map is .port %d and .ip %d\n", server.Port, server.Ip)
 
 	// If first index, then create new availability - else grab and update
 	connStruct := convertToConnStruct(conn)

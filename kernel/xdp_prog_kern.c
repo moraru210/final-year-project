@@ -398,6 +398,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		}
 		
 		if (from_client(&conn) && reroute.rematch_flag && state) {
+			bpf_printk("enter rematch code");
 			struct connection original_conn = reroute.original_conn;
 			struct server server = create_server_struct(&original_conn);
 			struct availability *availability_ptr = bpf_map_lookup_elem(&available_map, &server);

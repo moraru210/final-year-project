@@ -19,6 +19,7 @@ const (
 	connection_map_path = "/sys/fs/bpf/lo/conn_map"
 	numbers_map_path    = "/sys/fs/bpf/lo/numbers_map"
 	available_map_path  = "/sys/fs/bpf/lo/available_map"
+	state_map_path      = "/sys/fs/bpf/lo/state_map"
 	first_server_no     = 4171
 )
 
@@ -39,7 +40,15 @@ type Reroute struct {
 	Original_index uint32
 	New_conn       Connection
 	New_index      uint32
-	State          uint32
+}
+
+type Numbers struct {
+	Seq_no     uint32
+	Ack_no     uint32
+	Seq_offset int32
+	Ack_offset int32
+	Init_seq   uint32
+	Init_ack   uint32
 }
 
 type Server struct {
@@ -87,18 +96,24 @@ func main() {
 		fmt.Printf("Could not open %s\n", available_map_path)
 	}
 
+	state_map, err := ebpf.LoadPinnedMap(state_map_path, nil)
+	if err != nil {
+		fmt.Printf("Could not open %s\n", state_map_path)
+	}
+
 	defer conn_map.Close()
 	defer numbers_map.Close()
 	defer available_map.Close()
+	defer state_map.Close()
 
 	// Set up servers
 	setUpServerConnections(no_workers, no_clients, available_map)
 
 	// Set up listener for clients
-	go startLB(no_workers, available_map, conn_map)
+	go startLB(no_workers, available_map, conn_map, state_map, numbers_map)
 }
 
-func startLB(no_workers int, available_map *ebpf.Map, conn_map *ebpf.Map) {
+func startLB(no_workers int, available_map *ebpf.Map, conn_map *ebpf.Map, state_map *ebpf.Map, numbers_map *ebpf.Map) {
 	ln := startListener()
 	if ln == nil {
 		return
@@ -118,8 +133,59 @@ func startLB(no_workers int, available_map *ebpf.Map, conn_map *ebpf.Map) {
 			continue
 		}
 
-		connStruct := convertToConnStruct(conn)
+		connStruct := reverseConn(convertToConnStruct(conn))
+		fmt.Printf("Client conn.src %d conn.dst %d\n", connStruct.Src_port, connStruct.Dst_port)
 		insertToConnMap(connStruct, *server_conn, conn_map, index)
+		insertToStateMap(connStruct.Src_port, 0, state_map)
+
+		setInitialOffsets(connStruct, *server_conn, numbers_map)
+	}
+}
+
+func setInitialOffsets(client_conn Connection, server_conn Connection, numbers_map *ebpf.Map) {
+	var (
+		client_n *Numbers
+		server_n *Numbers
+	)
+	grabNumbersForConns(client_conn, server_conn, numbers_map, client_n, server_n)
+	if client_n == nil || server_n == nil {
+		fmt.Printf("client_n or server_n returned as nil, hence exit setInitialOffests\n")
+	}
+
+	calculateAndUpdateOffsets(client_conn, server_conn, numbers_map, *client_n, *server_n)
+}
+
+func calculateAndUpdateOffsets(client_conn Connection, server_conn Connection, numbers_map *ebpf.Map, client_n Numbers, server_n Numbers) {
+	client_n.Seq_offset = int32(client_n.Seq_no - server_n.Ack_no)
+	client_n.Ack_offset = int32(client_n.Ack_no - server_n.Seq_no)
+
+	server_n.Seq_offset = int32(server_n.Seq_no - client_n.Ack_no)
+	server_n.Ack_offset = int32(server_n.Ack_no - client_n.Seq_no)
+
+	if err := numbers_map.Put(client_conn, client_n); err != nil {
+
+	}
+
+	if err := numbers_map.Put(server_conn, server_n); err != nil {
+
+	}
+}
+
+func grabNumbersForConns(client_conn Connection, server_conn Connection, numbers_map *ebpf.Map, client_n *Numbers, server_n *Numbers) {
+	if err := numbers_map.Lookup(client_conn, client_n); err != nil {
+		fmt.Printf("Initial Offsets: unable to retrieve numbers for client_conn\n")
+		return
+	}
+
+	rev_server := reverseConn(server_conn)
+	if err := numbers_map.Lookup(rev_server, server_n); err != nil {
+		fmt.Printf("Initial Offsets: unable to retrieve numbers for client_conn\n")
+	}
+}
+
+func insertToStateMap(client_port uint32, state uint32, state_map *ebpf.Map) {
+	if err := state_map.Put(client_port, state); err != nil {
+		fmt.Printf("Unable to insert an init state for conn: %v\n", err)
 	}
 }
 
@@ -129,10 +195,9 @@ func insertToConnMap(client_conn Connection, server_conn Connection, conn_map *e
 		Original_index: uint32(index),
 		New_conn:       server_conn,
 		New_index:      uint32(index),
-		State:          0,
 	}
 	if err := conn_map.Put(client_conn, reroute); err != nil {
-		fmt.Printf("Unable to insert server reroute for client_conn in conn_map\n")
+		fmt.Printf("Unable to insert server reroute for client_conn in conn_map: %v\n", err)
 		return
 	}
 
@@ -144,10 +209,9 @@ func insertToConnMap(client_conn Connection, server_conn Connection, conn_map *e
 		Original_index: uint32(0),
 		New_conn:       rev_client,
 		New_index:      uint32(0),
-		State:          0,
 	}
 	if err := conn_map.Put(rev_server, rev_reroute); err != nil {
-		fmt.Printf("Unable to insert client reroute for rev(server_conn) in conn_map\n")
+		fmt.Printf("Unable to insert client reroute for rev(server_conn) in conn_map: %v\n", err)
 	}
 }
 

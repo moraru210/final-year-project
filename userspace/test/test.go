@@ -253,6 +253,7 @@ func acceptConnection(ln net.Listener) net.Conn {
 
 func chooseServerConn(no_workers int, available_map *ebpf.Map) (*Connection, int) {
 	chosen_server_port := first_server_no + (round_robin % no_workers)
+	round_robin += 1
 	chosen_server := Server{
 		Port: uint32(chosen_server_port),
 		Ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
@@ -269,13 +270,24 @@ func chooseServerConn(no_workers int, available_map *ebpf.Map) (*Connection, int
 		return nil, -1
 	}
 
+	if index >= 0 && index < len(availability.Valid) {
+		availability.Valid[index] = 1
+	} else {
+		fmt.Printf("Unable to update avaialability.Valid[index] since index %d out of range\n", index)
+		return nil, -1
+	}
+
+	if err := available_map.Put(chosen_server, availability); err != nil {
+		fmt.Printf("Failed to put updated avaialability in map: %v\n", err)
+		return nil, -1
+	}
+
 	return conn_ptr, index
 }
 
 func findAvailableConn(availability Availability) (*Connection, int) {
 	for i, conn := range availability.Conns {
 		if availability.Valid[i] == 0 {
-			availability.Valid[i] = 1
 			return &conn, i
 		}
 	}

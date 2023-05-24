@@ -459,9 +459,9 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				bpf_printk("Could not update map with updated client_numbers offsets");
 			}
 
-		} else if (from_server(&conn) && !state) {
+		} else if (from_server(&conn) && state==0) { 
 			unsigned int one = 1;
-			if (bpf_map_update_elem(&state_map, &conn.src_port, &one, 0) < 0) {
+			if (bpf_map_update_elem(&state_map, &reroute.original_conn.dst_port, &one, 0) < 0) {
 				bpf_printk("Unable to change state back to 0");
 			}
 

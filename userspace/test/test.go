@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 
 	ebpf "github.com/cilium/ebpf"
 )
@@ -58,10 +60,13 @@ type Server struct {
 
 type Availability struct {
 	Conns [2]Connection
-	Valid [2]uint32 //signifies that is in use if 1
+	Valid [2]uint32 //signifies that conn is in use if 1
 }
 
 func main() {
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+
 	//input parsing
 	if len(os.Args) != 3 {
 		fmt.Println("Usage: test <integer> <integer>")
@@ -111,7 +116,63 @@ func main() {
 	setUpServerConnections(no_workers, no_clients, available_map)
 
 	// Set up listener for clients
-	startLB(no_workers, available_map, conn_map, state_map, numbers_map)
+	go startLB(no_workers, available_map, conn_map, state_map, numbers_map)
+
+	// Set up rematcher
+	go rematchControl(available_map, conn_map)
+
+	// Wait for interrupt signal
+	<-interrupt
+	fmt.Println("\nInterrupt signal received. Cleaning up...")
+}
+
+func rematchControl(available_map *ebpf.Map, conn_map *ebpf.Map) {
+	fmt.Printf("Stated rematcher\n")
+
+	var c_no, s_no uint32
+
+	for {
+		fmt.Print("Enter two integers separated by a space: ")
+		_, err := fmt.Scanf("%d %d", &c_no, &s_no)
+		if err != nil {
+			fmt.Println("Invalid input. Please enter two integers separated by a space.")
+			continue
+		}
+
+		rematch(c_no, s_no, available_map, conn_map)
+	}
+}
+
+func rematch(client_src_port, server_no uint32, available_map *ebpf.Map, conn_map *ebpf.Map) {
+	server := Server{
+		Port: server_no,
+		Ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
+	}
+	server_conn, index := grabServerConn(server, available_map)
+	if server_conn == nil {
+		fmt.Printf("Rematcher: Not able to grab a server\n")
+		return
+	}
+
+	client_conn := Connection{
+		Src_port: client_src_port,
+		Dst_port: uint32(8080),
+		Src_ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
+		Dst_ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
+	}
+	var reroute Reroute
+	if err := conn_map.Lookup(client_conn, &reroute); err != nil {
+		fmt.Printf("Rematcher: Not able to lookup reroute for given client_conn\n")
+		return
+	}
+
+	reroute.New_conn = *server_conn
+	reroute.New_index = uint32(index)
+	reroute.Rematch_flag = 1
+
+	if err := conn_map.Put(client_conn, reroute); err != nil {
+		fmt.Printf("Rematcher: Not able to put rematch in conn_map")
+	}
 }
 
 func startLB(no_workers int, available_map *ebpf.Map, conn_map *ebpf.Map, state_map *ebpf.Map, numbers_map *ebpf.Map) {
@@ -258,8 +319,13 @@ func chooseServerConn(no_workers int, available_map *ebpf.Map) (*Connection, int
 		Port: uint32(chosen_server_port),
 		Ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
 	}
+
+	return grabServerConn(chosen_server, available_map)
+}
+
+func grabServerConn(server Server, available_map *ebpf.Map) (*Connection, int) {
 	var availability Availability
-	if err := available_map.Lookup(chosen_server, &availability); err != nil {
+	if err := available_map.Lookup(server, &availability); err != nil {
 		fmt.Printf("Failed to lookup availability from map for client conn: %v\n", err)
 		return nil, -1
 	}
@@ -277,7 +343,7 @@ func chooseServerConn(no_workers int, available_map *ebpf.Map) (*Connection, int
 		return nil, -1
 	}
 
-	if err := available_map.Put(chosen_server, availability); err != nil {
+	if err := available_map.Put(server, availability); err != nil {
 		fmt.Printf("Failed to put updated avaialability in map: %v\n", err)
 		return nil, -1
 	}

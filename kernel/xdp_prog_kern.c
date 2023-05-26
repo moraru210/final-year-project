@@ -1,11 +1,52 @@
 #include <linux/bpf.h>
+#include <linux/in.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
-#include <linux/in.h>
 
-#include "../common/parsing_helpers.h"
-#include "../common/rewrite_helpers.h"
-#include "./common.h"
+#include <stddef.h>
+#include <linux/if_ether.h>
+#include <linux/if_packet.h>
+#include <linux/ip.h>
+#include <linux/ipv6.h>
+#include <linux/tcp.h>
+
+#define MAX_CLIENTS 2
+#define LB_LISTENER_PORT 8080
+
+struct connection {
+	unsigned int src_port;
+	unsigned int dst_port;
+	unsigned int src_ip;
+	unsigned int dst_ip;
+};
+
+struct reroute {
+	struct connection original_conn;
+	unsigned int original_index;
+	unsigned int rematch_flag;
+	struct connection new_conn;
+	unsigned int new_index;
+};
+
+struct numbers {
+	unsigned int seq_no;
+	unsigned int ack_no;
+	signed int seq_offset;
+	signed int ack_offset;
+	unsigned int init_seq;
+	unsigned int init_ack;
+};
+
+struct server {
+	unsigned int port;
+	unsigned int ip;
+};
+
+struct availability {
+	struct connection conns[MAX_CLIENTS];
+	unsigned int valid[MAX_CLIENTS];
+	//spin_lock maybe?
+};
 
 #define max(a,b)             \
 ({                           \
@@ -17,41 +58,156 @@
 #define MIN_SERVER_PORT 4171
 #define MAX_SERVER_PORT (4170+MAX_CLIENTS) 
 
-struct bpf_map_def SEC("maps") conn_map = {
-	.type        = BPF_MAP_TYPE_HASH,
-	.key_size    = sizeof(struct connection),
-	.value_size  = sizeof(struct reroute),
-	.max_entries = 20,
+/* Allow users of header file to redefine VLAN max depth */
+#ifndef VLAN_MAX_DEPTH
+#define VLAN_MAX_DEPTH 4
+#endif
+
+struct hdr_cursor {
+	void *pos;
 };
 
-struct bpf_map_def SEC("maps") numbers_map = {
-	.type        = BPF_MAP_TYPE_HASH,
-	.key_size    = sizeof(struct connection),
-	.value_size  = sizeof(struct numbers),
-	.max_entries = 20,
+/*
+ *	struct vlan_hdr - vlan header
+ *	@h_vlan_TCI: priority and VLAN ID
+ *	@h_vlan_encapsulated_proto: packet type ID or len
+ */
+struct vlan_hdr {
+	__be16	h_vlan_TCI;
+	__be16	h_vlan_encapsulated_proto;
 };
 
-struct bpf_map_def SEC("maps") available_map = {
-	.type        = BPF_MAP_TYPE_HASH,
-	.key_size    = sizeof(struct server),
-	.value_size  = sizeof(struct availability),
-	.max_entries = 20,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 20);
+	__type(key, struct connection);
+	__type(value, struct reroute);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+} conn_map SEC(".maps");
 
-struct bpf_map_def SEC("maps") state_map = {
-	.type        = BPF_MAP_TYPE_HASH,
-	.key_size    = sizeof(unsigned int),
-	.value_size  = sizeof(unsigned int),
-	.max_entries = 20,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 20);
+	__type(key, struct connection);
+	__type(value, struct numbers);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+} numbers_map SEC(".maps");
 
-struct bpf_map_def SEC("maps") rematch_map = {
-	.type        = BPF_MAP_TYPE_HASH,
-	.key_size    = sizeof(unsigned int),
-	.value_size  = sizeof(unsigned int),
-	.max_entries = 20,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 20);
+	__type(key, struct server);
+	__type(value, struct availability);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+} available_map SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 20);
+	__type(key, unsigned int);
+	__type(value, unsigned int);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+} state_map SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 20);
+	__type(key, unsigned int);
+	__type(value, unsigned int);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+} rematch_map SEC(".maps");
+
+
+static __always_inline int proto_is_vlan(__u16 h_proto)
+{
+	return !!(h_proto == bpf_htons(ETH_P_8021Q) ||
+		  h_proto == bpf_htons(ETH_P_8021AD));
+}
+
+/* Notice, parse_ethhdr() will skip VLAN tags, by advancing nh->pos and returns
+ * next header EtherType, BUT the ethhdr pointer supplied still points to the
+ * Ethernet header. Thus, caller can look at eth->h_proto to see if this was a
+ * VLAN tagged packet.
+ */
+static __always_inline int parse_ethhdr(struct hdr_cursor *nh, void *data_end,
+					struct ethhdr **ethhdr)
+{
+	struct ethhdr *eth = nh->pos;
+	struct vlan_hdr *vlh;
+	__u16 h_proto;
+	int i;
+
+	if (eth + 1 > data_end)
+		return -1;
+
+	nh->pos = eth + 1;
+	*ethhdr = eth;
+	vlh = nh->pos;
+	h_proto = eth->h_proto;
+
+	/* Use loop unrolling to avoid the verifier restriction on loops;
+	 * support up to VLAN_MAX_DEPTH layers of VLAN encapsulation.
+	 */
+	#pragma unroll
+	for (i = 0; i < VLAN_MAX_DEPTH; i++) {
+		if (!proto_is_vlan(h_proto))
+			break;
+
+		if (vlh + 1 > data_end)
+			break;
+
+		h_proto = vlh->h_vlan_encapsulated_proto;
+		vlh++;
+	}
+
+	nh->pos = vlh;
+	return h_proto; /* network-byte-order */
+}
+
+static __always_inline int parse_iphdr(struct hdr_cursor *nh,
+				       void *data_end,
+				       struct iphdr **iphdr)
+{
+	struct iphdr *iph = nh->pos;
+	int hdrsize;
+
+	if (iph + 1 > data_end)
+		return -1;
+
+	hdrsize = iph->ihl * 4;
+
+	/* Variable-length IPv4 header, need to use byte-based arithmetic */
+	if (nh->pos + hdrsize > data_end)
+		return -1;
+
+	nh->pos += hdrsize;
+	*iphdr = iph;
+
+	return iph->protocol;
+}
+
+/*
+ * parse_tcphdr: parse and return the length of the tcp header
+ */
+static __always_inline int parse_tcphdr(struct hdr_cursor *nh,
+					void *data_end,
+					struct tcphdr **tcphdr)
+{
+	int len;
+	struct tcphdr *h = nh->pos;
+
+	if (h + 1 > data_end)
+		return -1;
+
+	len = h->doff * 4;
+	if ((void *) h + len > data_end)
+		return -1;
+
+	nh->pos  = h + 1;
+	*tcphdr = h;
+
+	return len;
+}
 
 static __always_inline __u16 csum_reduce_helper(__u32 csum)
 {
@@ -59,6 +215,22 @@ static __always_inline __u16 csum_reduce_helper(__u32 csum)
 	csum = ((csum & 0xffff0000) >> 16) + (csum & 0xffff);
 	return csum;
 }
+
+// static __always_inline void swap_src_dst_mac(void *data)
+// {
+// 	unsigned short *p = data;
+// 	unsigned short dst[3];
+
+// 	dst[0] = p[0];
+// 	dst[1] = p[1];
+// 	dst[2] = p[2];
+// 	p[0] = p[3];
+// 	p[1] = p[4];
+// 	p[2] = p[5];
+// 	p[3] = dst[0];
+// 	p[4] = dst[1];
+// 	p[5] = dst[2];
+// }
 
 static inline unsigned short generic_checksum(unsigned short *buf, void *data_end, unsigned long sum, int max) 
 {
@@ -524,7 +696,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		iph->daddr = reroute.original_conn.dst_ip;
 		bpf_printk("modified ip addresses");
 		bpf_printk("modified ip header saddr %u and daddr %u", reroute.original_conn.src_ip, reroute.original_conn.dst_ip);
-		swap_src_dst_mac(ethh);
+		//swap_src_dst_mac(ethh);
 		bpf_printk("Swapped eth addresses");
 		bpf_printk("destination TCP port after is %u", bpf_ntohs(tcph->dest));
 		perform_checksums(tcph, iph, data_end);

@@ -69,3 +69,5 @@ xdp_sample_pkts_user
 
 libbpf/src/build/*
 basic-solutions/*
+
+*.sum

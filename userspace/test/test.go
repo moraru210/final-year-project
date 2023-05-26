@@ -39,9 +39,9 @@ type Connection struct {
 
 type Reroute struct {
 	Original_conn  Connection
+	New_conn       Connection
 	Rematch_flag   uint32
 	Original_index uint32
-	New_conn       Connection
 	New_index      uint32
 }
 

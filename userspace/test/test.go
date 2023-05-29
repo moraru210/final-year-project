@@ -295,9 +295,9 @@ func insertToConnMap(client_conn Connection, server_conn Connection, conn_map *e
 	rev_reroute := Reroute{
 		Original_conn:  rev_client,
 		Rematch_flag:   uint32(0),
-		Original_index: uint32(0),
+		Original_index: uint32(index),
 		New_conn:       rev_client,
-		New_index:      uint32(0),
+		New_index:      uint32(index),
 	}
 	if err := conn_map.Put(rev_server, rev_reroute); err != nil {
 		fmt.Printf("Unable to insert client reroute for rev(server_conn) in conn_map: %v\n", err)

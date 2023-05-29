@@ -487,11 +487,11 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		goto OUT;
 	} else {
 		bpf_printk("Found a reroute");
-		struct reroute reroute = *(reroute_ptr);
+		// struct reroute reroute = *(reroute_ptr);
 		bpf_printk("Reroute original_index %u", reroute_ptr->original_index);
-		bpf_printk("Reroute original.src %u and original.dst %u", reroute.original_conn.src_port, reroute.original_conn.dst_port);
-		bpf_printk("Reroute rematch flag: %u", reroute.rematch_flag);
-		bpf_printk("Reroute new.src %u and new.dst %u", reroute.new_conn.src_port, reroute.new_conn.dst_port);
+		bpf_printk("Reroute original.src %u and original.dst %u", reroute_ptr->original_conn.src_port, reroute_ptr->original_conn.dst_port);
+		bpf_printk("Reroute rematch flag: %u", reroute_ptr->rematch_flag);
+		bpf_printk("Reroute new.src %u and new.dst %u", reroute_ptr->new_conn.src_port, reroute_ptr->new_conn.dst_port);
 
 		if (tcph->rst && from_client(&conn)) {
 			bpf_printk("Reroute packet received is a RST from a client");
@@ -514,7 +514,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				perform_checksums(tcph, iph, data_end);
 			}
 
-			struct connection original_conn = reroute.original_conn;
+			struct connection original_conn = reroute_ptr->original_conn;
 
 			//create the worker struct
 			//grab avaialability from available map
@@ -528,7 +528,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				goto OUT;
 			} else {
 				struct availability availability = *(availability_ptr);
-				__u32 index = reroute.original_index;
+				__u32 index = reroute_ptr->original_index;
 				__u32 max_size = sizeof(availability.conns) / sizeof(availability.conns[0]);
 				if (index >= max_size) {
 					bpf_printk("index: %u", index);
@@ -564,6 +564,63 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			}			
 		
 			goto OUT;
+		} else if (tcph->rst && from_server(&conn)) {
+			bpf_printk("Received a RST from a server");
+			// Need to delete Re-routing from client->server - should there be a new rerouting?
+			// Need to delete availibility of server? or just connection?
+			// 
+			struct server server = create_server_struct(&conn);
+			struct availability *availability_ptr = bpf_map_lookup_elem(&available_map, &server);
+			if (!availability_ptr) {
+				bpf_printk("could not find avaialability in order to invalidate reroute.original");
+				bpf_printk("ABORT PACKET");
+				action = XDP_ABORTED;
+				goto OUT;
+			} else {
+				__u32 index = reroute_ptr->original_index;
+				__u32 max_size = sizeof(availability_ptr->conns) / sizeof(availability_ptr->conns[0]);
+				if (index >= max_size) {
+					bpf_printk("index: %u", index);
+					bpf_printk("ABORT PACKET");
+					action = XDP_ABORTED;
+					goto OUT;
+				} else {
+					bpf_printk("index: %u", index);
+					availability_ptr->valid[index] = 2;
+				}
+			}
+
+			struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
+			if (!numbers_elem_ptr) {
+				bpf_printk("could not find numbers elem in numbers map");
+				bpf_printk("ABORT PACKET");
+				action = XDP_ABORTED;
+				goto OUT;
+			} else {
+				bpf_printk("successfully found numbers elem in numbers map");
+				if (bpf_map_delete_elem(&numbers_map, &conn)) {
+					bpf_printk("unable to delete numbers from numbers map for conn");
+				}
+				tcph->seq = bpf_htonl(numbers_elem_ptr->init_seq);
+				tcph->ack_seq = bpf_htonl(numbers_elem_ptr->init_ack);
+
+				perform_checksums(tcph, iph, data_end);
+			}
+
+			if (bpf_map_delete_elem(&conn_map, &conn)) {
+				bpf_printk("unable to delete client_conn from conn map");
+				// bpf_printk("ABORT PACKET");
+				// action = XDP_ABORTED;
+				// goto OUT;
+			}
+
+			struct connection rev_original_conn = create_reverse_conn(&reroute_ptr->original_conn);
+			if (bpf_map_delete_elem(&conn_map, &rev_original_conn)) {
+				bpf_printk("unable to delete rev(original_conn) from conn map");
+				// bpf_printk("ABORT PACKET");
+				// action = XDP_ABORTED;
+				// goto OUT;
+			}				
 		}
 		
 		__u32 *state_ptr;
@@ -582,15 +639,15 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				goto OUT;
 			}
 		} else if (from_server(&conn)) {
-			state_ptr = bpf_map_lookup_elem(&state_map, &reroute.original_conn.dst_port);
+			state_ptr = bpf_map_lookup_elem(&state_map, &reroute_ptr->original_conn.dst_port);
 			if (!state_ptr) {
-				bpf_printk("Unable to find state from client_conn port %u", reroute.original_conn.dst_port);
+				bpf_printk("Unable to find state from client_conn port %u", reroute_ptr->original_conn.dst_port);
 				action = XDP_ABORTED;
 				goto OUT;
 			}
-			rematch_ptr = bpf_map_lookup_elem(&rematch_map, &reroute.original_conn.dst_port);
+			rematch_ptr = bpf_map_lookup_elem(&rematch_map, &reroute_ptr->original_conn.dst_port);
 			if (!rematch_ptr) {
-				bpf_printk("Unable to find rematch from client_conn port %u", reroute.original_conn.dst_port);
+				bpf_printk("Unable to find rematch from client_conn port %u", reroute_ptr->original_conn.dst_port);
 				action = XDP_ABORTED;
 				goto OUT;
 			}
@@ -609,11 +666,11 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			goto OUT;
 		}
 		
-		bpf_printk("from_client: %d, reroute.rematch_flag: %u, state: %u", from_client(&conn), reroute.rematch_flag, state);
+		bpf_printk("from_client: %d, reroute.rematch_flag: %u, state: %u", from_client(&conn), reroute_ptr->rematch_flag, state);
 		bpf_printk("rematch: %u", rematch);
 		if (from_client(&conn) && rematch && state) {
 			bpf_printk("enter rematch code");
-			struct connection original_conn = reroute.original_conn;
+			struct connection original_conn = reroute_ptr->original_conn;
 			struct server server = create_server_struct(&original_conn);
 			struct availability *availability_ptr = bpf_map_lookup_elem(&available_map, &server);
 			if (!availability_ptr) {
@@ -623,7 +680,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				goto OUT;
 			} else {
 				struct availability availability = *(availability_ptr);
-				__u32 index = reroute.original_index;
+				__u32 index = reroute_ptr->original_index;
 				__u32 max_size = sizeof(availability.conns) / sizeof(availability.conns[0]);
 				if (index >= max_size) {
 					bpf_printk("index: %u", index);
@@ -632,7 +689,6 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 					goto OUT;
 				} else {
 					bpf_printk("index: %u", index);
-					bpf_printk("index with d: %d", index);
 					availability.valid[index] = 0;
 				}
 
@@ -645,8 +701,8 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				}
 			}
 
-			reroute.original_conn = reroute.new_conn;
-			reroute.original_index = reroute.new_index; // FIXME: 
+			reroute_ptr->original_conn = reroute_ptr->new_conn;
+			reroute_ptr->original_index = reroute_ptr->new_index; // FIXME: 
 			
 			__u32 zero = 0;
 			if (bpf_map_update_elem(&state_map, &conn.src_port, &zero, 0) < 0) {
@@ -657,17 +713,17 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				bpf_printk("Unable to change rematch back to 0");
 			}
 
-			if (bpf_map_update_elem(&conn_map, &conn, &reroute, 0) < 0) {
+			if (bpf_map_update_elem(&conn_map, &conn, reroute_ptr, 0) < 0) {
 				bpf_printk("Unable to change reroute when rematching");
 			}
 
-			struct connection rev_server = create_reverse_conn(&reroute.original_conn);
+			struct connection rev_server = create_reverse_conn(&reroute_ptr->original_conn);
 			struct connection rev_client = create_reverse_conn(&conn);
 			struct reroute rev_reroute;
 			rev_reroute.original_conn = rev_client;
-			rev_reroute.original_index = 0;
+			rev_reroute.original_index = reroute_ptr->new_index;
 			rev_reroute.new_conn = rev_client;
-			rev_reroute.new_index = 0;
+			rev_reroute.new_index = reroute_ptr->new_index;
 			rev_reroute.rematch_flag = 0;
 			if (bpf_map_update_elem(&conn_map, &rev_server, &rev_reroute, 0) < 0) {
 				bpf_printk("Unable to change reroute when rematching");
@@ -697,33 +753,25 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		} else if (from_server(&conn) && (state == 0)) { 
 			bpf_printk("Changing state to one");
 			__u32 one = 1;
-			if (bpf_map_update_elem(&state_map, &reroute.original_conn.dst_port, &one, 0) < 0) {
+			if (bpf_map_update_elem(&state_map, &reroute_ptr->original_conn.dst_port, &one, 0) < 0) {
 				bpf_printk("Unable to change state back to 0");
 			}
 
-			if (bpf_map_update_elem(&conn_map, &conn, &reroute, 0) < 0) {
-				bpf_printk("Failed to update conn_map with updated reroute.state (0->1)");
-			}
-
-		} else if (from_client(&conn) && state && !reroute.rematch_flag) {
+		} else if (from_client(&conn) && state && !rematch) {
 			bpf_printk("Changing state to zero");
 			__u32 zero = 0;
 			if (bpf_map_update_elem(&state_map, &conn.src_port, &zero, 0) < 0) {
 				bpf_printk("Unable to change state back to 0");
 			}
-
-			if (bpf_map_update_elem(&conn_map, &conn, &reroute, 0) < 0) {
-				bpf_printk("Failed to update conn_map with updated reroute.state (1->0)");
-			}
 		}
 
 		modify_seq_ack(&tcph, numbers_ptr->seq_offset, numbers_ptr->ack_offset);
-		tcph->source = bpf_htons(reroute.original_conn.src_port);
-		tcph->dest = bpf_htons(reroute.original_conn.dst_port);
-		iph->saddr = reroute.original_conn.src_ip;
-		iph->daddr = reroute.original_conn.dst_ip;
+		tcph->source = bpf_htons(reroute_ptr->original_conn.src_port);
+		tcph->dest = bpf_htons(reroute_ptr->original_conn.dst_port);
+		iph->saddr = reroute_ptr->original_conn.src_ip;
+		iph->daddr = reroute_ptr->original_conn.dst_ip;
 		bpf_printk("modified ip addresses");
-		bpf_printk("modified ip header saddr %u and daddr %u", reroute.original_conn.src_ip, reroute.original_conn.dst_ip);
+		bpf_printk("modified ip header saddr %u and daddr %u", reroute_ptr->original_conn.src_ip, reroute_ptr->original_conn.dst_ip);
 		//swap_src_dst_mac(ethh);
 		bpf_printk("Swapped eth addresses");
 		bpf_printk("destination TCP port after is %u", bpf_ntohs(tcph->dest));

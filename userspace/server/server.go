@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"os"
@@ -47,6 +48,16 @@ func main() {
 
 			// Print a message for each connection
 			fmt.Println("Received a connection")
+
+			// Create a new reader and read the incoming message
+			reader := bufio.NewReader(conn)
+			for {
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					break
+				}
+				fmt.Printf("Line received: %s", line)
+			}
 
 			// Close the connection when you're done with it.
 			defer conn.Close()

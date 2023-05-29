@@ -327,6 +327,14 @@ func acceptConnection(ln net.Listener) net.Conn {
 	// Disable TCP keep-alive on the accepted connection
 	tcpConn.SetKeepAlive(false)
 	tcpConn.SetKeepAlivePeriod(0)
+	//tcpConn.SetReadBuffer(0)
+
+	err = tcpConn.SetNoDelay(true) // Disable Nagle's algorithm
+	if err != nil {
+		fmt.Println("Error setting TCP_NODELAY option:", err.Error())
+		// Handle the error gracefully, e.g., log it and continue accepting connections
+		return nil
+	}
 
 	fmt.Println("Accepted connection")
 	return conn
@@ -390,11 +398,21 @@ func setUpServerConnections(no_workers int, no_clients int, available_map *ebpf.
 			if err != nil {
 				// Handle the error appropriately
 				fmt.Printf("<i: %d, j: %d> Failed to connect to localhost:417%d: %v\n", i, j, i, err)
+				os.Exit(1)
 			}
 
-			// Disable TCP keep-alive
-			if tcpConn, ok := conn.(*net.TCPConn); ok {
-				tcpConn.SetKeepAlive(false)
+			// Set the socket options
+			tcpConn := conn.(*net.TCPConn)
+			tcpConn.SetLinger(0)
+			// Disable TCP keep-alive on the accepted connection
+			tcpConn.SetKeepAlive(false)
+			tcpConn.SetKeepAlivePeriod(0)
+
+			err = tcpConn.SetNoDelay(true) // Disable Nagle's algorithm
+			if err != nil {
+				fmt.Println("Error setting TCP_NODELAY option:", err.Error())
+				// Handle the error gracefully, e.g., log it and continue accepting connections
+				os.Exit(1)
 			}
 
 			// Insert this new connection to available map

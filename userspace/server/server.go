@@ -47,22 +47,19 @@ func main() {
 			tcpConn.SetLinger(0)
 			tcpConn.SetKeepAlive(false)
 			tcpConn.SetKeepAlivePeriod(0)
+			//tcpConn.SetReadBuffer(0)
+
+			err = tcpConn.SetNoDelay(true) // Disable Nagle's algorithm
+			if err != nil {
+				fmt.Println("Error setting TCP_NODELAY option:", err.Error())
+				// Handle the error gracefully, e.g., log it and continue accepting connections
+				os.Exit(1)
+			}
 
 			// Print a message for each connection
 			fmt.Println("Received a connection")
 
-			// Create a new reader and read the incoming message
-			reader := bufio.NewReader(conn)
-			for {
-				line, err := reader.ReadString('\n')
-				if err != nil {
-					break
-				}
-				fmt.Printf("Line received: %s", line)
-			}
-
-			// Close the connection when you're done with it.
-			defer conn.Close()
+			go handleConnection(conn)
 		}
 	}()
 
@@ -72,4 +69,19 @@ func main() {
 
 	listener.Close()
 	os.Exit(0)
+}
+
+func handleConnection(conn net.Conn) {
+	// Create a new reader for the connection
+	reader := bufio.NewReader(conn)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			break
+		}
+		fmt.Printf("Line received: %s", line)
+	}
+
+	// Close the connection when you're done with it.
+	conn.Close()
 }

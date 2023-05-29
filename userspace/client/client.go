@@ -28,6 +28,10 @@ func main() {
 	// Set the socket options
 	tcpConn := conn.(*net.TCPConn)
 	tcpConn.SetLinger(0)
+	tcpConn.SetKeepAlive(false)
+	tcpConn.SetKeepAlivePeriod(0)
+	tcpConn.SetNoDelay(true)
+	//tcpConn.SetReadBuffer(0)
 
 	// Create a channel to receive OS signals
 	sigCh := make(chan os.Signal, 1)

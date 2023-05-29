@@ -321,11 +321,12 @@ func acceptConnection(ln net.Listener) net.Conn {
 		return nil
 	}
 
+	// Set the socket options
+	tcpConn := conn.(*net.TCPConn)
+	tcpConn.SetLinger(0)
 	// Disable TCP keep-alive on the accepted connection
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		tcpConn.SetKeepAlive(false)
-		tcpConn.SetKeepAlivePeriod(0) // Optionally set keep-alive period to 0 to disable periodic probes
-	}
+	tcpConn.SetKeepAlive(false)
+	tcpConn.SetKeepAlivePeriod(0)
 
 	fmt.Println("Accepted connection")
 	return conn

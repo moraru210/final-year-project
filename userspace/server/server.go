@@ -45,6 +45,8 @@ func main() {
 			// Set the socket options
 			tcpConn := conn.(*net.TCPConn)
 			tcpConn.SetLinger(0)
+			tcpConn.SetKeepAlive(false)
+			tcpConn.SetKeepAlivePeriod(0)
 
 			// Print a message for each connection
 			fmt.Println("Received a connection")

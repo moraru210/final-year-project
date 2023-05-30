@@ -40,7 +40,7 @@ type Connection struct {
 type Reroute struct {
 	Original_conn  Connection
 	New_conn       Connection
-	Rematch_flag   uint32
+	State_flag     uint32
 	Original_index uint32
 	New_index      uint32
 }
@@ -102,37 +102,26 @@ func main() {
 		fmt.Printf("Could not open %s\n", available_map_path)
 	}
 
-	state_map, err := ebpf.LoadPinnedMap(state_map_path, nil)
-	if err != nil {
-		fmt.Printf("Could not open %s\n", state_map_path)
-	}
-
-	rematch_map, err := ebpf.LoadPinnedMap(rematch_map_path, nil)
-	if err != nil {
-		fmt.Printf("Could not open %s\n", rematch_map_path)
-	}
-
 	defer conn_map.Close()
 	defer numbers_map.Close()
 	defer available_map.Close()
-	defer state_map.Close()
 
 	// Set up servers
 	fmt.Printf("reached this section\n")
 	setUpServerConnections(no_workers, no_clients, available_map)
 
 	// Set up listener for clients
-	go startLB(no_workers, available_map, conn_map, state_map, numbers_map, rematch_map)
+	go startLB(no_workers, available_map, conn_map, numbers_map)
 
 	// Set up rematcher
-	go rematchControl(available_map, conn_map, rematch_map)
+	go rematchControl(available_map, conn_map)
 
 	// Wait for interrupt signal
 	<-interrupt
 	fmt.Println("\nInterrupt signal received. Cleaning up...")
 }
 
-func rematchControl(available_map *ebpf.Map, conn_map *ebpf.Map, rematch_map *ebpf.Map) {
+func rematchControl(available_map *ebpf.Map, conn_map *ebpf.Map) {
 	fmt.Printf("Stated rematcher\n")
 
 	var c_no, s_no uint32
@@ -146,11 +135,11 @@ func rematchControl(available_map *ebpf.Map, conn_map *ebpf.Map, rematch_map *eb
 		}
 
 		fmt.Printf("Rematch: client_no %d and server_no %d\n", c_no, s_no)
-		rematch(c_no, s_no, available_map, conn_map, rematch_map)
+		rematch(c_no, s_no, available_map, conn_map)
 	}
 }
 
-func rematch(client_src_port, server_no uint32, available_map *ebpf.Map, conn_map *ebpf.Map, rematch_map *ebpf.Map) {
+func rematch(client_src_port, server_no uint32, available_map *ebpf.Map, conn_map *ebpf.Map) {
 	server := Server{
 		Port: server_no,
 		Ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
@@ -176,18 +165,16 @@ func rematch(client_src_port, server_no uint32, available_map *ebpf.Map, conn_ma
 
 	reroute.New_conn = *server_conn
 	reroute.New_index = uint32(index)
-	reroute.Rematch_flag = 1
+	if reroute.State_flag < 2 {
+		reroute.State_flag += 1
+	}
 
 	if err := conn_map.Put(client_conn, reroute); err != nil {
 		fmt.Printf("Rematcher: Not able to put rematch in conn_map: %v\n", err)
 	}
-
-	if err := rematch_map.Put(uint32(client_src_port), uint32(1)); err != nil {
-		fmt.Printf("Rematcher: unable to set rematch to 1 for %d\n", uint32(client_src_port))
-	}
 }
 
-func startLB(no_workers int, available_map *ebpf.Map, conn_map *ebpf.Map, state_map *ebpf.Map, numbers_map *ebpf.Map, rematch_map *ebpf.Map) {
+func startLB(no_workers int, available_map *ebpf.Map, conn_map *ebpf.Map, numbers_map *ebpf.Map) {
 	ln := startListener()
 	if ln == nil {
 		return
@@ -210,8 +197,6 @@ func startLB(no_workers int, available_map *ebpf.Map, conn_map *ebpf.Map, state_
 		connStruct := reverseConn(convertToConnStruct(conn))
 		fmt.Printf("Client conn.src %d conn.dst %d\n", connStruct.Src_port, connStruct.Dst_port)
 		insertToConnMap(connStruct, *server_conn, conn_map, index)
-		insertToStateMap(connStruct.Src_port, 0, state_map)
-		insertToRematchMap(connStruct.Src_port, 0, rematch_map)
 
 		setInitialOffsets(connStruct, *server_conn, numbers_map)
 	}
@@ -279,7 +264,7 @@ func insertToRematchMap(client_port uint32, rematch_flag uint32, rematch_map *eb
 func insertToConnMap(client_conn Connection, server_conn Connection, conn_map *ebpf.Map, index int) {
 	reroute := Reroute{
 		Original_conn:  server_conn,
-		Rematch_flag:   uint32(0),
+		State_flag:     uint32(0),
 		Original_index: uint32(index),
 		New_conn:       server_conn,
 		New_index:      uint32(index),
@@ -294,7 +279,7 @@ func insertToConnMap(client_conn Connection, server_conn Connection, conn_map *e
 
 	rev_reroute := Reroute{
 		Original_conn:  rev_client,
-		Rematch_flag:   uint32(0),
+		State_flag:     uint32(0),
 		Original_index: uint32(index),
 		New_conn:       rev_client,
 		New_index:      uint32(index),

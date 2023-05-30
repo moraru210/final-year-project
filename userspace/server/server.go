@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 )
 
 func main() {
@@ -72,16 +73,37 @@ func main() {
 }
 
 func handleConnection(conn net.Conn) {
-	// Create a new reader for the connection
+	defer conn.Close()
+
+	// Create a new reader and writer for the connection
 	reader := bufio.NewReader(conn)
+	writer := bufio.NewWriter(conn)
+
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			break
 		}
 		fmt.Printf("Line received: %s", line)
-	}
 
-	// Close the connection when you're done with it.
-	conn.Close()
+		// Check if the received line is "end of file"
+		if strings.TrimSpace(line) == "end of file" {
+			// Send the response
+			response := "RESP: received all of the request\n"
+			_, err := writer.WriteString(response)
+			if err != nil {
+				fmt.Println("Error writing response:", err.Error())
+				return
+			}
+
+			err = writer.Flush()
+			if err != nil {
+				fmt.Println("Error flushing response:", err.Error())
+				return
+			}
+
+			fmt.Println("Response sent")
+			return
+		}
+	}
 }

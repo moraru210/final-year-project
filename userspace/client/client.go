@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -11,7 +12,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run main.go <port>")
+		fmt.Println("Usage: go run client.go <port>")
 		os.Exit(1)
 	}
 
@@ -56,7 +57,7 @@ func main() {
 }
 
 func sendTextFromFile(conn net.Conn) {
-	filePath := "input"
+	filePath := "input.txt"
 	data, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		fmt.Printf("Failed to read file '%s': %v\n", filePath, err)
@@ -71,4 +72,20 @@ func sendTextFromFile(conn net.Conn) {
 	}
 
 	fmt.Println("Text sent successfully!")
+
+	// Receive and print the response from the server
+	response := receiveResponse(conn)
+	fmt.Println("Response received:")
+	fmt.Println(response)
+}
+
+func receiveResponse(conn net.Conn) string {
+	reader := bufio.NewReader(conn)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Printf("Failed to receive response: %v\n", err)
+		return ""
+	}
+
+	return response
 }

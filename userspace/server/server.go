@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 )
 
 func main() {
@@ -87,7 +86,7 @@ func handleConnection(conn net.Conn) {
 		fmt.Printf("Line received: %s", line)
 
 		// Check if the received line is "end of file"
-		if strings.TrimSpace(line) == "end of file" {
+		if line == "eof\n" {
 			// Send the response
 			response := "RESP: received all of the request\n"
 			_, err := writer.WriteString(response)
@@ -105,5 +104,6 @@ func handleConnection(conn net.Conn) {
 			fmt.Println("Response sent")
 			return
 		}
+		fmt.Println("here")
 	}
 }

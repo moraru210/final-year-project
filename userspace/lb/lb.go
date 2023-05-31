@@ -2,346 +2,489 @@ package main
 
 /*
 #cgo CFLAGS: -g -Wall
-#include "../../kernel/common.h"
 #include <arpa/inet.h>
 #include <stdint.h>
 */
 import "C"
 import (
-    "fmt"
-    "net"
-    "github.com/cilium/cilium/pkg/bpf"
-    "unsafe"
-    "github.com/moraru210/final-year-project/userspace/common"
-    "os"
-    "os/signal"
-    "syscall"
+	"fmt"
+	"net"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+
+	ebpf "github.com/cilium/ebpf"
 )
 
+const (
+	connection_map_path = "/sys/fs/bpf/lo/conn_map"
+	numbers_map_path    = "/sys/fs/bpf/lo/numbers_map"
+	available_map_path  = "/sys/fs/bpf/lo/available_map"
+	state_map_path      = "/sys/fs/bpf/lo/state_map"
+	rematch_map_path    = "/sys/fs/bpf/lo/rematch_map"
+	first_server_no     = 4171
+)
+
+var (
+	round_robin = 0
+)
+
+type Connection struct {
+	Src_port uint32
+	Dst_port uint32
+	Src_ip   uint32
+	Dst_ip   uint32
+}
+
+type Reroute struct {
+	Original_conn  Connection
+	Original_index uint32
+	Seq_offset     int32
+	Ack_offset     int32
+	Rematch_flag   uint32
+	New_conn       Connection
+	New_index      uint32
+}
+
+type Numbers struct {
+	Seq_no   uint32
+	Ack_no   uint32
+	Init_seq uint32
+	Init_ack uint32
+}
+
+type Server struct {
+	Port uint32
+	Ip   uint32
+}
+
+type Availability struct {
+	Conns [2]Connection
+	Valid [2]uint32 //signifies that conn is in use if 1
+}
+
 func main() {
-    const connection_map_path = "/sys/fs/bpf/lo/conn_map"
-    Conn_map_fd, err := bpf.ObjGet(connection_map_path)
-    if (err != nil) {
-        fmt.Println("Error finding map object: ", err.Error())
-        return
-    }
-    fmt.Println("complete finding Conn_map")
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 
-    const Numbers_map_path = "/sys/fs/bpf/lo/numbers_map"
-    Numbers_map_fd, err := bpf.ObjGet(Numbers_map_path)
-    if (err != nil) {
-        fmt.Println("Error finding map object: ", err.Error())
-        return
-    }
-    fmt.Println("complete finding Numbers_map")
+	//input parsing
+	if len(os.Args) != 3 {
+		fmt.Println("Usage: test <integer> <integer>")
+		os.Exit(1)
+	}
 
-    maps := common.Maps_fd{
-        Conn_map: Conn_map_fd,
-        Numbers_map: Numbers_map_fd,
-    }
+	no_clients, err := strconv.Atoi(os.Args[1])
+	if err != nil {
+		fmt.Println("Invalid first integer argument")
+		os.Exit(1)
+	}
 
-    //set up connection with worker nodes
-    conn1, conn2, err := setUpWorkerConnections()
-    if (err != nil) {
-        fmt.Println("Error setting up worker connections:", err.Error())
-        return
-    }
-    defer conn1.Close()
-    defer conn2.Close()
+	no_workers, err := strconv.Atoi(os.Args[2])
+	if err != nil {
+		fmt.Println("Invalid second integer argument")
+		os.Exit(1)
+	}
 
-    // Listen for incoming connections
-    ln, err := net.Listen("tcp", ":8080")
-    if err != nil {
-        fmt.Println("Error listening:", err.Error())
-        return
-    }
-    defer ln.Close()
+	//map handling
+	conn_map, err := ebpf.LoadPinnedMap(connection_map_path, nil)
+	if err != nil {
+		fmt.Printf("Could not open %s\n", connection_map_path)
+	}
 
-    fmt.Println("Server listening on port 8080")
+	numbers_map, err := ebpf.LoadPinnedMap(numbers_map_path, nil)
+	if err != nil {
+		fmt.Printf("Could not open %s\n", numbers_map_path)
+	}
 
-    // Handle interrupt signal
-    sigCh := make(chan os.Signal, 1)
-    signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-    go func() {
-        sig := <-sigCh
-        fmt.Println("Received %v signal, shutting down...", sig)
-        cleanup(conn1, conn2, maps)
-        ln.Close()
-        os.Exit(0)
-    }()
-    
-    num_workers := 2
-    rr := 1
-    for {
-        conn, err := ln.Accept()
-        select {
-		case <-sigCh:
-			fmt.Println("Received signal, exiting Accept loop")
-			return
-		default:
-			if err != nil {
-				fmt.Println("Failed to accept incoming connection: %v\n", err)
-				continue
-			}
-			fmt.Println("Accepted connection")
+	available_map, err := ebpf.LoadPinnedMap(available_map_path, nil)
+	if err != nil {
+		fmt.Printf("Could not open %s\n", available_map_path)
+	}
 
-            // Handle new connection in a goroutine
-            if (rr % num_workers == 1) {
-                go handleConnection(conn, conn1, maps)
-            } else {
-                go handleConnection(conn, conn2, maps)
-            }
-            rr += 1
+	defer conn_map.Close()
+	defer numbers_map.Close()
+	defer available_map.Close()
+
+	// Set up servers
+	fmt.Printf("reached this section\n")
+	setUpServerConnections(no_workers, no_clients, available_map)
+
+	// Set up listener for clients
+	go startLB(no_workers, available_map, conn_map, numbers_map)
+
+	// // Set up rematcher
+	// go rematchControl(available_map, conn_map)
+
+	// Wait for interrupt signal
+	<-interrupt
+	fmt.Println("\nInterrupt signal received. Cleaning up...")
+}
+
+// func rematchControl(available_map *ebpf.Map, conn_map *ebpf.Map) {
+// 	fmt.Printf("Stated rematcher\n")
+
+// 	var c_no, s_no uint32
+
+// 	for {
+// 		fmt.Print("Enter two integers separated by a space: \n")
+// 		_, err := fmt.Scanf("%d %d", &c_no, &s_no)
+// 		if err != nil {
+// 			fmt.Println("Invalid input. Please enter two integers separated by a space.")
+// 			continue
+// 		}
+
+// 		fmt.Printf("Rematch: client_no %d and server_no %d\n", c_no, s_no)
+// 		rematch(c_no, s_no, available_map, conn_map)
+// 	}
+// }
+
+// func rematch(client_src_port, server_no uint32, available_map *ebpf.Map, conn_map *ebpf.Map) {
+// 	server := Server{
+// 		Port: server_no,
+// 		Ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
+// 	}
+// 	server_conn, index := grabServerConn(server, available_map)
+// 	if server_conn == nil {
+// 		fmt.Printf("Rematcher: Not able to grab a server\n")
+// 		return
+// 	}
+
+// 	client_conn := Connection{
+// 		Src_port: uint32(client_src_port),
+// 		Dst_port: uint32(8080),
+// 		Src_ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
+// 		Dst_ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
+// 	}
+// 	var reroute Reroute
+// 	if err := conn_map.Lookup(client_conn, &reroute); err != nil {
+// 		fmt.Printf("Rematcher: Not able to lookup reroute for given client_conn: %v\n", err)
+// 		return
+// 	}
+// 	fmt.Printf("Rematcher - check: original_conn.src %d, original_conn.dst %d\n", reroute.Original_conn.Src_port, reroute.Original_conn.Dst_port)
+
+// 	reroute.New_conn = *server_conn
+// 	reroute.New_index = uint32(index)
+// 	if reroute.State_flag < 2 {
+// 		reroute.State_flag += 1
+// 	}
+
+// 	if err := conn_map.Put(client_conn, reroute); err != nil {
+// 		fmt.Printf("Rematcher: Not able to put rematch in conn_map: %v\n", err)
+// 	}
+// }
+
+func startLB(no_workers int, available_map *ebpf.Map, conn_map *ebpf.Map, numbers_map *ebpf.Map) {
+	ln := startListener()
+	if ln == nil {
+		return
+	}
+	defer ln.Close()
+
+	for {
+		conn := acceptConnection(ln)
+		if conn == nil {
+			continue
 		}
-    }
+		defer conn.Close()
+
+		server_conn, index := chooseServerConn(no_workers, available_map)
+		if server_conn == nil {
+			fmt.Printf("not able to choose a server conn\n")
+			continue
+		}
+
+		servStruct := *server_conn
+		connStruct := reverseConn(convertToConnStruct(conn))
+		fmt.Printf("Client conn.src %d conn.dst %d\n", connStruct.Src_port, connStruct.Dst_port)
+		fmt.Printf("Server conn.src %d conn.dst %d\n", servStruct.Src_port, servStruct.Dst_port)
+
+		var nums Numbers
+		if err := numbers_map.Lookup(connStruct, &nums); err != nil {
+			fmt.Printf("Unable to retrieve numbers for (conn.src %d, conn.dst %d): %v\n", connStruct.Src_port, connStruct.Dst_port, err)
+			os.Exit(1)
+		} else {
+			fmt.Printf("Successfully retrieved numbers\n")
+		}
+
+		client_reroute, server_reroute, err := getReroutes(connStruct, servStruct, numbers_map, index)
+		if err != nil {
+			fmt.Printf("Unable to retrieve reroutes for connections: %v\n", err)
+			os.Exit(1)
+		}
+
+		revServer := reverseConn(servStruct)
+		insertToConnMap(connStruct, client_reroute, conn_map)
+		insertToConnMap(revServer, server_reroute, conn_map)
+	}
 }
 
-func cleanup(conn1 net.Conn, conn2 net.Conn, maps common.Maps_fd) {
-    fmt.Println("Interrupt signal received! Terminating connections...")
-    /*****/
-    c1_remoteAddr := conn1.RemoteAddr().(*net.TCPAddr)
-    //c1_ip := c1_remoteAddr.IP.String()
-    c1_rem_port := C.uint(c1_remoteAddr.Port)
+func getReroutes(client_conn Connection, server_conn Connection, numbers_map *ebpf.Map, index int) (Reroute, Reroute, error) {
+	client_n, server_n, err := grabNumbersForConns(client_conn, server_conn, numbers_map)
+	if err != nil {
+		fmt.Printf("client_n or server_n returned as nil, hence exit setInitialOffests\n")
+		return Reroute{}, Reroute{}, err
+	}
 
-    c1_localAddr := conn1.LocalAddr().(*net.TCPAddr)
-    c1_loc_port := C.uint(c1_localAddr.Port)
+	c_seq_off, c_ack_off := calculateOffsets(client_n, server_n)
+	client_reroute := Reroute{
+		Original_conn:  server_conn,
+		Original_index: uint32(index),
+		Seq_offset:     c_seq_off,
+		Ack_offset:     c_ack_off,
+		Rematch_flag:   uint32(0),
+		New_conn:       server_conn,
+		New_index:      uint32(index),
+	}
 
-    lo_ip := C.inet_addr(C.CString("0x7f000001"))
-    fmt.Println("lo_ip is: ", lo_ip)
+	s_ack_off, s_seq_off := calculateOffsets(server_n, client_n)
+	rev_client_conn := reverseConn(client_conn)
+	server_reroute := Reroute{
+		Original_conn:  rev_client_conn,
+		Original_index: uint32(index),
+		Seq_offset:     s_seq_off,
+		Ack_offset:     s_ack_off,
+		Rematch_flag:   uint32(0),
+		New_conn:       rev_client_conn,
+		New_index:      uint32(index),
+	}
 
-    c1 := C.struct_connection{
-        src_port: c1_rem_port,
-        dst_port: c1_loc_port,
-        src_ip: lo_ip,
-        dst_ip: lo_ip,
-    }
-    /*****/
-    fmt.Println("conn1 src: %d and dst %d", c1.src_port, c1.dst_port)
-    /*****/
-    c2_remoteAddr := conn2.RemoteAddr().(*net.TCPAddr)
-    //c2_ip := c2_remoteAddr.IP.String()
-    c2_rem_port := C.uint(c2_remoteAddr.Port)
-
-    c2_localAddr := conn2.LocalAddr().(*net.TCPAddr)
-    c2_loc_port := C.uint(c2_localAddr.Port)
-
-    c2 := C.struct_connection{
-        src_port: c2_rem_port,
-        dst_port: c2_loc_port,
-        src_ip: lo_ip,
-        dst_ip: lo_ip,
-    }
-    /*****/
-    fmt.Println("conn2 src: %d and dst %d", c2.src_port, c2.dst_port)
-    /*****/
-
-    /*****/
-    // Delete c1 and its inverse (it exists) from conn_map
-    var c1_res = C.struct_connection{
-        src_port: C.uint(0),
-        dst_port: C.uint(0),
-        src_ip: C.uint(0),
-        dst_ip: C.uint(0),
-    }
-    err := bpf.LookupElement(maps.Conn_map, unsafe.Pointer(&c1), unsafe.Pointer(&c1_res))
-    if (err != nil) {
-        fmt.Println("Error, could not find worker's numbers elem: ", err.Error())
-        //return
-    } else {
-        rev_c1_res := reverse(c1_res)
-        del_err := bpf.DeleteElement(maps.Conn_map, unsafe.Pointer(&rev_c1_res))
-        if (del_err != nil) {
-            fmt.Println("could not delete c1 res conn from conn_map: ", del_err.Error())
-        }
-    }
-    del_err := bpf.DeleteElement(maps.Conn_map, unsafe.Pointer(&c1))
-    if (del_err != nil) {
-        fmt.Println("could not delete c1 conn from conn_map: ", del_err.Error())
-    }
-    /*****/
-
-    /*****/
-    // Delete c2 and its inverse (it exists) from conn_map
-    var c2_res = C.struct_connection{
-        src_port: C.uint(0),
-        dst_port: C.uint(0),
-        src_ip: C.uint(0),
-        dst_ip: C.uint(0),
-    }
-    err = bpf.LookupElement(maps.Conn_map, unsafe.Pointer(&c2), unsafe.Pointer(&c2_res))
-    if (err != nil) {
-        fmt.Println("Error, could not find worker's numbers elem: ", err.Error())
-        //return
-    } else {
-        rev_c2_res := reverse(c2_res)
-        del_err := bpf.DeleteElement(maps.Conn_map, unsafe.Pointer(&rev_c2_res))
-        if (del_err != nil) {
-            fmt.Println("could not delete c2 res conn from conn_map: ", del_err.Error())
-        }
-    }
-    del_err = bpf.DeleteElement(maps.Conn_map, unsafe.Pointer(&c2))
-    if (del_err != nil) {
-        fmt.Println("could not delete c2 conn from conn_map: ", del_err.Error())
-    }
-    /*****/
-    fmt.Println("complete cleanup")
+	return client_reroute, server_reroute, nil
 }
 
-func setUpWorkerConnections() (net.Conn, net.Conn, error) {
-    // Connect to netcat server at localhost:4170
-    conn1, err := net.Dial("tcp", "localhost:4170")
-    if err != nil {
-        fmt.Println("Error connecting to localhost:4170:", err)
-        return nil, nil, err
-    }
-    fmt.Println("Connected to localhost:4170")
-
-    // Connect to netcat server at localhost:4171
-    conn2, err := net.Dial("tcp", "localhost:4171")
-    if err != nil {
-        fmt.Println("Error connecting to localhost:4171:", err)
-        return nil, nil, err
-    }
-    fmt.Println("Connected to localhost:4171")
-
-    return conn1, conn2, nil
+func calculateOffsets(conn_n Numbers, other_n Numbers) (int32, int32) {
+	seq_offset := int32(conn_n.Seq_no - other_n.Seq_no)
+	ack_offset := int32(conn_n.Ack_no - other_n.Ack_no)
+	return seq_offset, ack_offset
 }
 
-func handleConnection(conn net.Conn, conn_w net.Conn, maps common.Maps_fd) {
-    // Get the client's IP address and port number
-    remoteAddr := conn.RemoteAddr().(*net.TCPAddr)
-    c_ip := remoteAddr.IP.String()
-    c_port := C.uint(remoteAddr.Port)
+func grabNumbersForConns(client_conn Connection, server_conn Connection, numbers_map *ebpf.Map) (Numbers, Numbers, error) {
+	var client_n Numbers
+	var server_n Numbers
 
-    fmt.Printf("Client connected from %s:%d\n", c_ip, c_port)
+	err := numbers_map.Lookup(client_conn, &client_n)
+	if err != nil {
+		fmt.Printf("Initial Offsets: unable to retrieve numbers for client_conn: %v\n", err)
+	} else {
+		fmt.Printf("server.SrcPort is  %d server.DstPort is %d\n", server_conn.Src_port, server_conn.Dst_port)
+		err = numbers_map.Lookup(server_conn, &server_n)
+		if err != nil {
+			fmt.Printf("Initial Offsets: unable to retrieve numbers for server_conn: %v\n", err)
+		}
+	}
 
-    lo_ip := C.inet_addr(C.CString("0x7f000001"))
-    fmt.Println("lo_ip is: ", lo_ip)
-
-    client_c := C.struct_connection{
-        src_port: c_port,
-        dst_port: 8080,
-        src_ip: lo_ip,
-        dst_ip: lo_ip,
-    }
-
-    fmt.Printf("Access client connection struct src_port %d\n", client_c.src_port);
-
-    // Get the worker's IP address and port number
-    remoteAddr = conn_w.RemoteAddr().(*net.TCPAddr)
-    w_ip := remoteAddr.IP.String()
-    w_rem_port := C.uint(remoteAddr.Port)
-
-    localAddr := conn_w.LocalAddr().(*net.TCPAddr)
-    w_loc_port := C.uint(localAddr.Port)
-
-    fmt.Printf("Connected to worker from %s:%d\n", w_ip, w_rem_port)
-
-    worker_c := C.struct_connection{
-        src_port: w_rem_port,
-        dst_port: w_loc_port,
-        src_ip: lo_ip,
-        dst_ip: lo_ip,
-    }
-
-    fmt.Printf("Access worker connection struct dst_port %d\n", worker_c.dst_port);
-
-    //Handle the initial seq and ack offsets for the lb c<->w connections
-    // *** client->LB ***
-    var c_numbers = C.struct_numbers{
-        seq_no: C.uint(0),
-        ack_no: C.uint(0),
-        seq_offset: C.int(0),
-        ack_offset: C.int(0),
-        init_seq: C.uint(0),
-        init_ack: C.uint(0),
-    }
-    err := bpf.LookupElement(maps.Numbers_map, unsafe.Pointer(&client_c), unsafe.Pointer(&c_numbers))
-    if (err != nil) {
-        fmt.Println("Error, could not find client's numbers elem: ", err.Error())
-        return
-    }
-    fmt.Println("completed client's Numbers_map lookup")
-    // ******
-    // *** LB<-worker ***
-    var w_numbers = C.struct_numbers{
-        seq_no: C.uint(0),
-        ack_no: C.uint(0),
-        seq_offset: C.int(0),
-        ack_offset: C.int(0),
-        init_seq: C.uint(0),
-        init_ack: C.uint(0),
-    }
-    err = bpf.LookupElement(maps.Numbers_map, unsafe.Pointer(&worker_c), unsafe.Pointer(&w_numbers))
-    if (err != nil) {
-        fmt.Println("Error, could not find worker's numbers elem: ", err.Error())
-        return
-    }
-    fmt.Println("completed worker's Numbers_map lookup")
-    // ******
-    // *** calculate offsets for each connection direction and add to maps
-    fmt.Println("c_seq is %d and c_ack is %d\n", c_numbers.seq_no, c_numbers.ack_no)
-    fmt.Println("w_seq is %d and w_ack is %d\n", w_numbers.seq_no, w_numbers.ack_no)
-    var seq_off = C.int(c_numbers.seq_no - w_numbers.ack_no) //w is inv direction
-    var ack_off = C.int(c_numbers.ack_no - w_numbers.seq_no) //w is inv direction
-    fmt.Println("Client: seq_off is %d and ack_off is %d\n", seq_off, ack_off)
-
-    c_numbers.seq_offset = seq_off
-    c_numbers.ack_offset = ack_off
-
-    /* Update init seq and ack numbers */
-    c_numbers.init_seq = c_numbers.seq_no
-    c_numbers.init_ack = c_numbers.ack_no
-    w_numbers.init_seq = w_numbers.seq_no
-    w_numbers.init_ack = w_numbers.ack_no
-
-    err = bpf.UpdateElement(maps.Numbers_map, "Numbers_map", unsafe.Pointer(&client_c), unsafe.Pointer(&c_numbers), bpf.BPF_ANY)
-    if (err != nil) {
-        fmt.Println("Error in updating numbers_elem in Numbers_map: ", err.Error())
-        return
-    } 
-    fmt.Println("complete updating Numbers_map")
-    
-    var inv_seq_off = C.int(w_numbers.seq_no - c_numbers.ack_no)
-    var inv_ack_off = C.int(w_numbers.ack_no - c_numbers.seq_no)
-    fmt.Println("Worker: seq_off is %d and ack_off is %d\n", inv_seq_off, inv_ack_off)
-
-    w_numbers.seq_offset = inv_seq_off
-    w_numbers.ack_offset = inv_ack_off
-
-    err = bpf.UpdateElement(maps.Numbers_map, "Numbers_map", unsafe.Pointer(&worker_c), unsafe.Pointer(&w_numbers), bpf.BPF_ANY)
-    if (err != nil) {
-        fmt.Println("Error in updating numbers_elem in Numbers_map: ", err.Error())
-        return
-    } 
-    fmt.Println("complete updating Numbers_map")
-    // ******
-
-    // Update Ports Map with conn->conn_w and set conn offsets to 0.
-    r_worker := reverse(worker_c)
-    err = bpf.UpdateElement(maps.Conn_map, "Conn_map", unsafe.Pointer(&client_c), unsafe.Pointer(&r_worker), bpf.BPF_ANY)
-    if (err != nil) {
-        fmt.Println("Error in updating Conn_map: ", err.Error())
-        return
-    } 
-    fmt.Println("complete updating Conn_map")
-
-    // Update Ports Map with conn_w->rev(conn) 
-    r_client := reverse(client_c)
-    err = bpf.UpdateElement(maps.Conn_map, "Conn_map", unsafe.Pointer(&worker_c), unsafe.Pointer(&r_client), bpf.BPF_ANY)
-    if (err != nil) {
-        fmt.Println("Error in updating Conn_map: ", err.Error())
-        return
-    } 
-    fmt.Println("complete updating map")
+	return client_n, server_n, err
 }
 
-func reverse(conn C.struct_connection) C.struct_connection {
-    var tmp_p = conn.src_port
-    var tmp_i = conn.src_ip
-    conn.src_port = conn.dst_port
-    conn.dst_port = tmp_p
-    conn.src_ip = conn.dst_ip
-    conn.dst_ip = tmp_i
-    return conn
+func insertToStateMap(client_port uint32, state uint32, state_map *ebpf.Map) {
+	if err := state_map.Put(client_port, state); err != nil {
+		fmt.Printf("Unable to insert an init state for conn: %v\n", err)
+	}
+}
+
+func insertToRematchMap(client_port uint32, rematch_flag uint32, rematch_map *ebpf.Map) {
+	if err := rematch_map.Put(client_port, rematch_flag); err != nil {
+		fmt.Printf("Unable to insert an init rematch_flag for conn: %v\n", err)
+	}
+}
+
+func insertToConnMap(conn Connection, reroute Reroute, conn_map *ebpf.Map) {
+	if err := conn_map.Put(conn, reroute); err != nil {
+		fmt.Printf("Unable to insert server reroute for (conn.src: %d, conn.dst: %d) in conn_map: %v\n", conn.Src_port, conn.Dst_port, err)
+		os.Exit(1)
+	}
+}
+
+func startListener() net.Listener {
+	ln, err := net.Listen("tcp", ":8080")
+	if err != nil {
+		fmt.Println("Error listening:", err.Error())
+		return nil
+	}
+
+	return ln
+}
+
+func acceptConnection(ln net.Listener) net.Conn {
+	conn, err := ln.Accept()
+	if err != nil {
+		fmt.Printf("Failed to accept incoming connection: %v\n", err)
+		return nil
+	}
+
+	// Set the socket options
+	tcpConn := conn.(*net.TCPConn)
+	tcpConn.SetLinger(0)
+	// Disable TCP keep-alive on the accepted connection
+	tcpConn.SetKeepAlive(false)
+	tcpConn.SetKeepAlivePeriod(0)
+	//tcpConn.SetReadBuffer(0)
+
+	err = tcpConn.SetNoDelay(true) // Disable Nagle's algorithm
+	if err != nil {
+		fmt.Println("Error setting TCP_NODELAY option:", err.Error())
+		// Handle the error gracefully, e.g., log it and continue accepting connections
+		return nil
+	}
+
+	fmt.Println("Accepted connection")
+	return conn
+}
+
+func chooseServerConn(no_workers int, available_map *ebpf.Map) (*Connection, int) {
+	chosen_server_port := first_server_no + (round_robin % no_workers)
+	round_robin += 1
+	chosen_server := Server{
+		Port: uint32(chosen_server_port),
+		Ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
+	}
+
+	return grabServerConn(chosen_server, available_map)
+}
+
+func grabServerConn(server Server, available_map *ebpf.Map) (*Connection, int) {
+	var availability Availability
+	if err := available_map.Lookup(server, &availability); err != nil {
+		fmt.Printf("Failed to lookup availability from map for client conn: %v\n", err)
+		return nil, -1
+	}
+
+	conn_ptr, index := findAvailableConn(availability)
+	if conn_ptr == nil {
+		fmt.Printf("Unable to find a valid connection in availability struct\n")
+		return nil, -1
+	}
+
+	if index >= 0 && index < len(availability.Valid) {
+		availability.Valid[index] = 1
+	} else {
+		fmt.Printf("Unable to update avaialability.Valid[index] since index %d out of range\n", index)
+		return nil, -1
+	}
+
+	if err := available_map.Put(server, availability); err != nil {
+		fmt.Printf("Failed to put updated avaialability in map: %v\n", err)
+		return nil, -1
+	}
+
+	return conn_ptr, index
+}
+
+func findAvailableConn(availability Availability) (*Connection, int) {
+	for i, conn := range availability.Conns {
+		if availability.Valid[i] == 0 {
+			return &conn, i
+		}
+	}
+	return nil, -1
+}
+
+func setUpServerConnections(no_workers int, no_clients int, available_map *ebpf.Map) {
+	for i := 1; i <= no_workers; i++ {
+		for j := 0; j < no_clients; j++ {
+
+			conn_dest := fmt.Sprintf("localhost:417%d", i)
+			fmt.Println(conn_dest)
+			conn, err := net.Dial("tcp", conn_dest)
+			if err != nil {
+				// Handle the error appropriately
+				fmt.Printf("<i: %d, j: %d> Failed to connect to localhost:417%d: %v\n", i, j, i, err)
+				os.Exit(1)
+			}
+
+			// Set the socket options
+			tcpConn := conn.(*net.TCPConn)
+			tcpConn.SetLinger(0)
+			// Disable TCP keep-alive on the accepted connection
+			tcpConn.SetKeepAlive(false)
+			tcpConn.SetKeepAlivePeriod(0)
+
+			err = tcpConn.SetNoDelay(true) // Disable Nagle's algorithm
+			if err != nil {
+				fmt.Println("Error setting TCP_NODELAY option:", err.Error())
+				// Handle the error gracefully, e.g., log it and continue accepting connections
+				os.Exit(1)
+			}
+
+			// Insert this new connection to available map
+			// Conn in this instance is localP: X, remoteP: 417Y
+			insertToAvailableMap(conn, available_map, j, no_workers)
+		}
+	}
+	fmt.Println("Completed setting up server connections")
+}
+
+func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_workers int) {
+	// Create key
+	remAddr := conn.RemoteAddr().(*net.TCPAddr)
+	lo_ip := uint32(C.inet_addr(C.CString("0x7f000001")))
+	server := Server{
+		Port: uint32(remAddr.Port),
+		Ip:   lo_ip,
+	}
+	fmt.Printf("Server key for available_map is .port %d and .ip %d\n", server.Port, server.Ip)
+
+	// If first index, then create new availability - else grab and update
+	connStruct := convertToConnStruct(conn)
+	var availability Availability
+	if index == 0 {
+		availability = Availability{
+			Conns: [2]Connection{},
+			Valid: [2]uint32{},
+		}
+	} else {
+		if err := available_map.Lookup(server, &availability); err != nil {
+			fmt.Printf("not able to find avaialability for connStruct with src_p %d and dst_p %d\n", connStruct.Src_port, connStruct.Dst_port)
+		}
+	}
+	fmt.Printf("len of availability arrays: %d\n", len(availability.Conns))
+	availability.Conns[index] = connStruct
+	availability.Valid[index] = uint32(0)
+
+	// Put into bpf map
+	if err := available_map.Put(server, availability); err != nil {
+		fmt.Printf("Could not insert Conn.src %d Conn.dst %d into Available_map: %v\n", connStruct.Src_port, connStruct.Dst_port, err)
+	}
+}
+
+func convertToConnStruct(conn net.Conn) Connection {
+	c_remoteAddr := conn.RemoteAddr().(*net.TCPAddr)
+	//c_rem_ip := c_remoteAddr.IP.String()
+	c_rem_port := uint32(c_remoteAddr.Port)
+
+	c_localAddr := conn.LocalAddr().(*net.TCPAddr)
+	c_loc_port := uint32(c_localAddr.Port)
+
+	lo_ip := uint32(C.inet_addr(C.CString("0x7f000001")))
+	fmt.Println("lo_ip is: ", lo_ip)
+
+	c := Connection{
+		Src_port: c_loc_port,
+		Dst_port: c_rem_port,
+		Src_ip:   lo_ip,
+		Dst_ip:   lo_ip,
+	}
+
+	fmt.Printf("conn src: %d and dst %d\n", c.Src_port, c.Dst_port)
+	return c
+}
+
+func generateDummyConn() Connection {
+	lo_ip := uint32(C.inet_addr(C.CString("0x7f000001")))
+	dummy := Connection{
+		Src_port: 0,
+		Dst_port: 0,
+		Src_ip:   lo_ip,
+		Dst_ip:   lo_ip,
+	}
+	return dummy
+}
+
+func reverseConn(conn Connection) Connection {
+	var new_conn Connection
+	new_conn.Src_port = conn.Dst_port
+	new_conn.Dst_port = conn.Src_port
+	new_conn.Src_ip = conn.Dst_ip
+	new_conn.Dst_ip = conn.Src_ip
+	return new_conn
 }

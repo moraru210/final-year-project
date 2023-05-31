@@ -102,7 +102,7 @@ func handleConnection(conn net.Conn) {
 			}
 
 			fmt.Println("Response sent")
-			return
+			//return
 		}
 		fmt.Println("here")
 	}

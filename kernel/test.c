@@ -23,7 +23,7 @@
 #define VLAN_MAX_DEPTH 4
 #endif
 
-/* Define maps */
+// /* Define maps */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, 30);
@@ -39,6 +39,14 @@ struct {
 	__type(value, struct numbers);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } numbers_map SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 30);
+	__type(key, struct server);
+	__type(value, struct availability);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+} available_map SEC(".maps");
 
 struct hdr_cursor {
 	void *pos;
@@ -146,48 +154,53 @@ static __always_inline int parse_tcphdr(struct hdr_cursor *nh,
 	return len;
 }
 
-// static __always_inline __u16 csum_reduce_helper(__u32 csum)
-// {
-// 	csum = ((csum & 0xffff0000) >> 16) + (csum & 0xffff);
-// 	csum = ((csum & 0xffff0000) >> 16) + (csum & 0xffff);
-// 	return csum;
-// }
+static __always_inline __u16 csum_reduce_helper(__u32 csum)
+{
+	csum = ((csum & 0xffff0000) >> 16) + (csum & 0xffff);
+	csum = ((csum & 0xffff0000) >> 16) + (csum & 0xffff);
+	return csum;
+}
 
-// static inline unsigned short generic_checksum(unsigned short *buf, void *data_end, unsigned long sum, int max) 
-// {
-//     for (int i = 0; i < max; i += 2) {
-// 	if ((void *)(buf + 1) > data_end)
-// 	    break;
-//         sum += *buf;
-//         buf++;
-//     }
-//     if((void *)buf +1 <= data_end) {
-// 		sum +=  bpf_htons((*((unsigned char *)buf)) << 8);
-//     }
-//     sum = (sum & 0xffff) + (sum >> 16);
-//     sum = (sum & 0xffff) + (sum >> 16);
-//     return ~sum;
-// }
+static inline unsigned short generic_checksum(unsigned short *buf, void *data_end, unsigned long sum, int max) 
+{
+	int flag = 0;
+    for (int i = 0; i < max; i += 2) {
+		if ((void *)(buf + 1) > data_end)
+			flag = 1;
+	    	break;
+        sum += *buf;
+        buf++;
+    }
+	if (!flag) {
+		if((void *)buf +1 <= data_end) {
+			sum +=  bpf_htons((*((unsigned char *)buf)) << 8);
+    	}
+	}
+    sum = (sum & 0xffff) + (sum >> 16);
+    sum = (sum & 0xffff) + (sum >> 16);
+    return ~sum;
+}
 
-// static inline __u16 l4_checksum(struct iphdr *iph, void *l4, void *data_end)
-// {
-//     __u32 csum = 0;
-//     csum += *(((__u16 *) &(iph->saddr))+0); // 1st 2 bytes
-//     csum += *(((__u16 *) &(iph->saddr))+1); // 2nd 2 bytes
-//     csum += *(((__u16 *) &(iph->daddr))+0); // 1st 2 bytes
-//     csum += *(((__u16 *) &(iph->daddr))+1); // 2nd 2 bytes
-//     csum += bpf_htons((__u16)iph->protocol); // protocol is a u8
-//     csum += bpf_htons((__u16)(data_end - (void *)l4)); 
-//     return generic_checksum((unsigned short *) l4, data_end, csum, 1480);
-// }
+static inline __u16 l4_checksum(struct iphdr *iph, void *l4, void *data_end)
+{
+    __u32 csum = 0;
+    csum += *(((__u16 *) &(iph->saddr))+0); // 1st 2 bytes
+    csum += *(((__u16 *) &(iph->saddr))+1); // 2nd 2 bytes
+    csum += *(((__u16 *) &(iph->daddr))+0); // 1st 2 bytes
+    csum += *(((__u16 *) &(iph->daddr))+1); // 2nd 2 bytes
+    csum += bpf_htons((__u16)iph->protocol); // protocol is a u8
+    csum += bpf_htons((__u16)(data_end - (void *)l4)); 
+	// return (csum >> 16);
+    return generic_checksum((unsigned short *) l4, data_end, csum, 1480);
+}
 
-// static inline void perform_checksums(struct tcphdr *tcph, struct iphdr *iph, void *data_end)
-// {
-// 	iph->check = 0;
-// 	iph->check = ~csum_reduce_helper(bpf_csum_diff(0, 0, (__be32 *)iph, sizeof(struct iphdr), 0));
-// 	tcph->check = 0;
-// 	tcph->check = l4_checksum(iph, tcph, data_end);
-// }
+static inline void perform_checksums(struct tcphdr *tcph, struct iphdr *iph, void *data_end)
+{
+	iph->check = 0;
+	iph->check = ~csum_reduce_helper(bpf_csum_diff(0, 0, (__be32 *)iph, sizeof(struct iphdr), 0));
+	tcph->check = 0;
+	tcph->check = l4_checksum(iph, tcph, data_end);
+}
 
 static inline struct connection create_conn_struct(struct tcphdr **tcph, struct iphdr **iph)
 {
@@ -235,7 +248,7 @@ static inline int to_client(struct connection *conn)
 	return 0;
 }
 
-static inline int generate_and_insert_numbers(struct connection *conn, __u32 *seq_no, __u32 *ack_no) {
+static inline int generate_and_insert_numbers(struct connection conn, __u32 *seq_no, __u32 *ack_no) {
 	struct numbers nums;
 	nums.seq_no = *ack_no;
 	nums.ack_no = *seq_no + 1;
@@ -247,11 +260,32 @@ static inline int generate_and_insert_numbers(struct connection *conn, __u32 *se
 	bpf_printk("Nums.seq: %u\n", nums.seq_no);
 	bpf_printk("Nums.ack: %u\n", nums.ack_no);
 
-	if (bpf_map_update_elem(&numbers_map, conn, &nums, 0) < 0) {
-		bpf_printk("Unable to introduce (conn.src: %u, conn.dst: %u) to numbers_map\n", conn->src_port, conn->dst_port);
+	if (bpf_map_update_elem(&numbers_map, &conn, &nums, 0) < 0) {
+		bpf_printk("Unable to introduce (conn.src: %u, conn.dst: %u) to numbers_map\n", conn.src_port, conn.dst_port);
 		return 0;
 	}
 	return 1;
+}
+
+static inline void modify_seq_ack(struct tcphdr **tcph_ptr, signed int seq_off, signed int ack_off) {
+	struct tcphdr *tcph = *(tcph_ptr);
+	__u32 cur_seq = bpf_ntohl(tcph->seq);
+	__u32 cur_ack = bpf_ntohl(tcph->ack_seq);
+
+	__u32 new_seq = cur_seq - seq_off;
+	tcph->seq = bpf_htonl(new_seq);
+	__u32 new_ack_seq = cur_ack - ack_off; 
+	tcph->ack_seq = bpf_htonl(new_ack_seq);
+}
+
+static inline struct connection create_reverse_conn(struct connection *conn) 
+{
+	struct connection rev_conn;
+	rev_conn.src_ip = conn->dst_ip;
+	rev_conn.dst_ip = conn->src_ip;
+	rev_conn.src_port = conn->dst_port;
+	rev_conn.dst_port = conn->src_port;
+	return rev_conn;
 }
 
 SEC("xdp_tcp")
@@ -310,13 +344,45 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
     }
 
 	struct connection conn = create_conn_struct(&tcph, &iph);
-	if (tcph->syn && tcph->ack && (to_client(&conn) || from_server(&conn))) {
+
+	// Query map for possible routing
+	struct reroute *reroute_ptr = bpf_map_lookup_elem(&conn_map, &conn);
+	if (!reroute_ptr) {
 		
-		if (!generate_and_insert_numbers(&conn, &seq_no, &ack_seq)) {
-			action = XDP_ABORTED;
-			goto OUT;
+		bpf_printk("REROUTE - could not query conn_map for routing\n");
+		// Introduce the seq and ack into NUMBERS_STRUCT for respective CONN
+		if (tcph->syn && tcph->ack && (to_client(&conn) || from_server(&conn))) {
+			struct connection rev_conn = create_reverse_conn(&conn);
+			bpf_printk("REROUTE - rev_conn.src: %u, rev_conn.dst: %u\n", rev_conn.src_port, rev_conn.dst_port);
+			if (generate_and_insert_numbers(rev_conn, &seq_no, &ack_seq) == 0) {
+				bpf_printk("ABORT - Unable to insert numbers for conn\n");
+				action = XDP_ABORTED;
+				goto OUT;
+			}
 		}
-		
+		goto OUT;
+
+	} else {
+
+		bpf_printk("REROUTE - reroute found\n");
+		//Check if rematch is needed
+		if (reroute_ptr->rematch_flag) {
+
+			bpf_printk("REMATCH - rematch flag set\n");
+
+		} else {
+			
+			modify_seq_ack(&tcph, reroute_ptr->seq_offset, reroute_ptr->ack_offset);
+			tcph->source = bpf_htons(reroute_ptr->original_conn.src_port);
+			tcph->dest = bpf_htons(reroute_ptr->original_conn.dst_port);
+			iph->saddr = reroute_ptr->original_conn.src_ip;
+			iph->daddr = reroute_ptr->original_conn.dst_ip;
+			
+			bpf_printk("AFTER MODIFICATION - tcp.src: %u, tcp.dst %u\n", bpf_ntohs(tcph->source), bpf_ntohs(tcph->dest));
+			perform_checksums(tcph, iph, data_end);
+			action = XDP_TX;
+			
+		}
 	}
 OUT:
 	bpf_printk("*** end of a packet ***");

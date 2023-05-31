@@ -28,3 +28,14 @@ struct numbers {
 	__u32 init_seq;
 	__u32 init_ack;
 };
+
+struct server {
+	__u32 port;
+	__u32 ip;
+};
+
+struct availability {
+	struct connection conns[MAX_CLIENTS];
+	__u32 valid[MAX_CLIENTS];
+	//spin_lock maybe?
+};

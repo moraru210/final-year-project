@@ -367,63 +367,6 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		goto OUT;
 	}
 	bpf_printk("parsed tcphdr");
-	// Complete initial checks
-
-	// Numbers map will store keys: C1->LB, W1->LB
-	// This is due to ease of quickly grabbing and applying offset on majority of packet cases
-	//	
-	//	for every packet (from/to servers/clients)
-	//		retrieve numbers kv pair
-	//		retrieve seq and ack_seq from current packet
-	//		update the numbers kv.value to have update seq and ack_seq values
-	//		place updated kv back to the numbers_map
-	//
-	//  if needs to reroute
-	//  	if rst and from client (done - needs recheck)
-	//			grab client_numbers from numbers_map (key is client_conn) (done)
-	//			grab server_numbers from numbers_map (key is reroute.original) (not needed?)
-	//			set packet.seq/ack to client_numbers.init_seq/ack
-	//			delete client_numbers from numbers_map
-	//			delete client_conn from conn_map
-	//			delete original_conn from conn_map
-	//			grab the availability struct for reroute.original_conn.dst_port/ip key
-	//			set availability.valid[pos(reroute.original_conn)] = true
-	//
-	//  	if from_client and reroute.rematch_flag is true and reroute.state is true (done - needs recheck)
-	//			grab the availability struct for reroute.original_conn.dst_port/ip key
-	//			set availability.valid[pos(reroute.original_conn)] = true
-	//			set reroute.original = reroute.new
-	// 			set reroute.rematch = 0
-	//			set reroute.state = 0
-	//			update conn_map to have update reroute	
-	//			grab reroute_numbers for rev(reroute.new) conn
-	//			grab client_numbers for client_conn
-	//			client_numbers.seq_offset = client_numbers.seq_no - reroute_numbers.ack_no
-	//			client_numbers.ack_offset = client_numbers.ack_no - reroute_numbers.seq_no
-	//			reroute_numbers.seq_offset = reroute_numbers.seq_no - client_numbers.ack_no
-	//			reroute_numbers.ack_offset = reroute_numbers.ack_no - client_numbers.seq_no
-	//			update numbers_map to contain the updated client_numbers for client_conn
-	//			update numbers_map to contain the updated reroute_numbers for rev(reroute.new)
-	//			use client_numbers to alter seq and ack correspondingly
-	//			
-	//		if from_server and reroute.state is false 
-	//			set reroute.state to true
-	//			update conn_map to have updated reroute
-	//			continue with offsets like normal
-	//
-	//		if from_client and reroute.state is true and reroute.rematch_flag is false
-	//			set reroute.state to false
-	//			update conn_map to have updated reroute
-	//			continue with offsets like normal
-	//		
-	//		change seq and ack_seq accordingly
-	//		change src and dst port accordingly	
-	//		perform tcp checksum
-	//		perform ipv4 checksum
-	//		action = XDP_TX
-	//		
-
-	// create connection struct using header information
 	struct connection conn = create_conn_struct(&tcph, &iph);
 
 	if (from_client(&conn) || from_server(&conn) || to_server(&conn)) {

@@ -1,4 +1,4 @@
-XDP_TARGETS  := xdp_prog_kern
+XDP_TARGETS  := test
 
 LLC ?= llc
 CLANG ?= clang

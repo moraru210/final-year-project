@@ -114,65 +114,63 @@ func main() {
 	go startLB(no_workers, available_map, conn_map, numbers_map)
 
 	// // Set up rematcher
-	// go rematchControl(available_map, conn_map)
+	go rematchControl(available_map, conn_map)
 
 	// Wait for interrupt signal
 	<-interrupt
 	fmt.Println("\nInterrupt signal received. Cleaning up...")
 }
 
-// func rematchControl(available_map *ebpf.Map, conn_map *ebpf.Map) {
-// 	fmt.Printf("Stated rematcher\n")
+func rematchControl(available_map *ebpf.Map, conn_map *ebpf.Map) {
+	fmt.Printf("Stated rematcher\n")
 
-// 	var c_no, s_no uint32
+	var c_no, s_no uint32
 
-// 	for {
-// 		fmt.Print("Enter two integers separated by a space: \n")
-// 		_, err := fmt.Scanf("%d %d", &c_no, &s_no)
-// 		if err != nil {
-// 			fmt.Println("Invalid input. Please enter two integers separated by a space.")
-// 			continue
-// 		}
+	for {
+		fmt.Print("Enter two integers separated by a space: \n")
+		_, err := fmt.Scanf("%d %d", &c_no, &s_no)
+		if err != nil {
+			fmt.Println("Invalid input. Please enter two integers separated by a space.")
+			continue
+		}
 
-// 		fmt.Printf("Rematch: client_no %d and server_no %d\n", c_no, s_no)
-// 		rematch(c_no, s_no, available_map, conn_map)
-// 	}
-// }
+		fmt.Printf("Rematch: client_no %d and server_no %d\n", c_no, s_no)
+		rematch(c_no, s_no, available_map, conn_map)
+	}
+}
 
-// func rematch(client_src_port, server_no uint32, available_map *ebpf.Map, conn_map *ebpf.Map) {
-// 	server := Server{
-// 		Port: server_no,
-// 		Ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
-// 	}
-// 	server_conn, index := grabServerConn(server, available_map)
-// 	if server_conn == nil {
-// 		fmt.Printf("Rematcher: Not able to grab a server\n")
-// 		return
-// 	}
+func rematch(client_src_port, server_no uint32, available_map *ebpf.Map, conn_map *ebpf.Map) {
+	server := Server{
+		Port: server_no,
+		Ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
+	}
+	server_conn, index := grabServerConn(server, available_map)
+	if server_conn == nil {
+		fmt.Printf("Rematcher: Not able to grab a server\n")
+		return
+	}
 
-// 	client_conn := Connection{
-// 		Src_port: uint32(client_src_port),
-// 		Dst_port: uint32(8080),
-// 		Src_ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
-// 		Dst_ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
-// 	}
-// 	var reroute Reroute
-// 	if err := conn_map.Lookup(client_conn, &reroute); err != nil {
-// 		fmt.Printf("Rematcher: Not able to lookup reroute for given client_conn: %v\n", err)
-// 		return
-// 	}
-// 	fmt.Printf("Rematcher - check: original_conn.src %d, original_conn.dst %d\n", reroute.Original_conn.Src_port, reroute.Original_conn.Dst_port)
+	client_conn := Connection{
+		Src_port: uint32(client_src_port),
+		Dst_port: uint32(8080),
+		Src_ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
+		Dst_ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
+	}
+	var reroute Reroute
+	if err := conn_map.Lookup(client_conn, &reroute); err != nil {
+		fmt.Printf("Rematcher: Not able to lookup reroute for given client_conn: %v\n", err)
+		return
+	}
+	fmt.Printf("Rematcher - check: original_conn.src %d, original_conn.dst %d\n", reroute.Original_conn.Src_port, reroute.Original_conn.Dst_port)
 
-// 	reroute.New_conn = *server_conn
-// 	reroute.New_index = uint32(index)
-// 	if reroute.State_flag < 2 {
-// 		reroute.State_flag += 1
-// 	}
+	reroute.New_conn = *server_conn
+	reroute.New_index = uint32(index)
+	reroute.Rematch_flag = uint32(1)
 
-// 	if err := conn_map.Put(client_conn, reroute); err != nil {
-// 		fmt.Printf("Rematcher: Not able to put rematch in conn_map: %v\n", err)
-// 	}
-// }
+	if err := conn_map.Put(client_conn, reroute); err != nil {
+		fmt.Printf("Rematcher: Not able to put rematch in conn_map: %v\n", err)
+	}
+}
 
 func startLB(no_workers int, available_map *ebpf.Map, conn_map *ebpf.Map, numbers_map *ebpf.Map) {
 	ln := startListener()

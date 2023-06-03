@@ -219,8 +219,8 @@ static __always_inline __u16 csum_reduce_helper(__u32 csum)
 static inline unsigned short generic_checksum(unsigned short *buf, void *data_end, unsigned long sum, int max) 
 {
     for (int i = 0; i < max; i += 2) {
-	if ((void *)(buf + 1) > data_end)
-	    break;
+		if ((void *)(buf + 1) > data_end)
+	    	break;
         sum += *buf;
         buf++;
     }

@@ -60,8 +60,8 @@ type Server struct {
 }
 
 type Availability struct {
-	Conns [2]Connection
-	Valid [2]uint32 //signifies that conn is in use if 1
+	Conns []Connection
+	Valid []uint32 //signifies that conn is in use if 1
 }
 
 func main() {
@@ -76,14 +76,14 @@ func main() {
 
 	no_clients, err := strconv.Atoi(os.Args[1])
 	if err != nil {
-		fmt.Println("Invalid first integer argument")
-		os.Exit(1)
+		fmt.Println("No first argument (no_clients) detected - default: 2")
+		no_clients = 2
 	}
 
 	no_workers, err := strconv.Atoi(os.Args[2])
 	if err != nil {
-		fmt.Println("Invalid second integer argument")
-		os.Exit(1)
+		fmt.Println("No second argument (no_workers) detected - default: 2")
+		no_workers = 2
 	}
 
 	//map handling
@@ -406,13 +406,13 @@ func setUpServerConnections(no_workers int, no_clients int, available_map *ebpf.
 
 			// Insert this new connection to available map
 			// Conn in this instance is localP: X, remoteP: 417Y
-			insertToAvailableMap(conn, available_map, j, no_workers)
+			insertToAvailableMap(conn, available_map, j, no_clients)
 		}
 	}
 	fmt.Println("Completed setting up server connections")
 }
 
-func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_workers int) {
+func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_clients int) {
 	// Create key
 	remAddr := conn.RemoteAddr().(*net.TCPAddr)
 	lo_ip := uint32(C.inet_addr(C.CString("0x7f000001")))
@@ -427,8 +427,8 @@ func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_
 	var availability Availability
 	if index == 0 {
 		availability = Availability{
-			Conns: [2]Connection{},
-			Valid: [2]uint32{},
+			Conns: make([]Connection, no_clients),
+			Valid: make([]uint32, no_clients),
 		}
 	} else {
 		if err := available_map.Lookup(server, &availability); err != nil {

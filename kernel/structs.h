@@ -1,6 +1,10 @@
 #include <linux/in.h>
 
+#ifndef MAX_CLIENTS
 #define MAX_CLIENTS 2
+#endif
+
+
 #define LB_LISTENER_PORT 8080
 #define MIN_SERVER_PORT 4171
 #define MAX_SERVER_PORT (4170+MAX_CLIENTS) 

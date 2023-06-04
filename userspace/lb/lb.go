@@ -70,7 +70,7 @@ func main() {
 
 	//input parsing
 	if len(os.Args) != 3 {
-		fmt.Println("Usage: test <integer> <integer>")
+		fmt.Println("Usage: .\\lb <integer> <integer>")
 		os.Exit(1)
 	}
 
@@ -107,13 +107,16 @@ func main() {
 	defer available_map.Close()
 
 	// Set up servers
-	fmt.Printf("reached this section\n")
+	fmt.Printf("Servers - setting up connection to servers\n")
 	setUpServerConnections(no_workers, no_clients, available_map)
+	fmt.Printf("Servers - completed servers setup\n")
 
 	// Set up listener for clients
+	fmt.Printf("LB - start")
 	go startLB(no_workers, available_map, conn_map, numbers_map)
 
 	// // Set up rematcher
+	fmt.Printf("Rematcher - start")
 	go rematchControl(available_map, conn_map)
 
 	// Wait for interrupt signal
@@ -122,19 +125,17 @@ func main() {
 }
 
 func rematchControl(available_map *ebpf.Map, conn_map *ebpf.Map) {
-	fmt.Printf("Stated rematcher\n")
-
 	var c_no, s_no uint32
 
 	for {
-		fmt.Print("Enter two integers separated by a space: \n")
+		fmt.Print("Rematcher - Enter two integers separated by a space: \n")
 		_, err := fmt.Scanf("%d %d", &c_no, &s_no)
 		if err != nil {
 			fmt.Println("Invalid input. Please enter two integers separated by a space.")
 			continue
 		}
 
-		fmt.Printf("Rematch: client_no %d and server_no %d\n", c_no, s_no)
+		fmt.Printf("Rematcher - rematch: client_no %d and server_no %d\n", c_no, s_no)
 		rematch(c_no, s_no, available_map, conn_map)
 	}
 }
@@ -146,7 +147,7 @@ func rematch(client_src_port, server_no uint32, available_map *ebpf.Map, conn_ma
 	}
 	server_conn, index := grabServerConn(server, available_map)
 	if server_conn == nil {
-		fmt.Printf("Rematcher: Not able to grab a server\n")
+		fmt.Printf("Rematcher - Error: Not able to grab a server\n")
 		return
 	}
 
@@ -158,17 +159,17 @@ func rematch(client_src_port, server_no uint32, available_map *ebpf.Map, conn_ma
 	}
 	var reroute Reroute
 	if err := conn_map.Lookup(client_conn, &reroute); err != nil {
-		fmt.Printf("Rematcher: Not able to lookup reroute for given client_conn: %v\n", err)
+		fmt.Printf("Rematcher - Error: Not able to lookup reroute for given client_conn: %v\n", err)
 		return
 	}
-	fmt.Printf("Rematcher - check: original_conn.src %d, original_conn.dst %d\n", reroute.Original_conn.Src_port, reroute.Original_conn.Dst_port)
+	//fmt.Printf("Rematcher - check: original_conn.src %d, original_conn.dst %d\n", reroute.Original_conn.Src_port, reroute.Original_conn.Dst_port)
 
 	reroute.New_conn = *server_conn
 	reroute.New_index = uint32(index)
 	reroute.Rematch_flag = uint32(1)
 
 	if err := conn_map.Put(client_conn, reroute); err != nil {
-		fmt.Printf("Rematcher: Not able to put rematch in conn_map: %v\n", err)
+		fmt.Printf("Rematcher - Error: not able to put rematch in conn_map: %v\n", err)
 	}
 }
 
@@ -188,26 +189,24 @@ func startLB(no_workers int, available_map *ebpf.Map, conn_map *ebpf.Map, number
 
 		server_conn, index := chooseServerConn(no_workers, available_map)
 		if server_conn == nil {
-			fmt.Printf("not able to choose a server conn\n")
+			fmt.Printf("LB - Error: not able to choose a server conn\n")
 			continue
 		}
 
 		servStruct := *server_conn
 		connStruct := reverseConn(convertToConnStruct(conn))
-		fmt.Printf("Client conn.src %d conn.dst %d\n", connStruct.Src_port, connStruct.Dst_port)
-		fmt.Printf("Server conn.src %d conn.dst %d\n", servStruct.Src_port, servStruct.Dst_port)
+		fmt.Printf("LB - Client conn.src %d conn.dst %d\n", connStruct.Src_port, connStruct.Dst_port)
+		fmt.Printf("LB - Server conn.src %d conn.dst %d\n", servStruct.Src_port, servStruct.Dst_port)
 
 		var nums Numbers
 		if err := numbers_map.Lookup(connStruct, &nums); err != nil {
-			fmt.Printf("Unable to retrieve numbers for (conn.src %d, conn.dst %d): %v\n", connStruct.Src_port, connStruct.Dst_port, err)
+			fmt.Printf("LB - Error: unable to retrieve numbers for (conn.src %d, conn.dst %d): %v\n", connStruct.Src_port, connStruct.Dst_port, err)
 			os.Exit(1)
-		} else {
-			fmt.Printf("Successfully retrieved numbers\n")
 		}
 
 		client_reroute, server_reroute, err := getReroutes(connStruct, servStruct, numbers_map, index)
 		if err != nil {
-			fmt.Printf("Unable to retrieve reroutes for connections: %v\n", err)
+			fmt.Printf("LB - Error: unable to retrieve reroutes for connections: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -220,7 +219,7 @@ func startLB(no_workers int, available_map *ebpf.Map, conn_map *ebpf.Map, number
 func getReroutes(client_conn Connection, server_conn Connection, numbers_map *ebpf.Map, index int) (Reroute, Reroute, error) {
 	client_n, server_n, err := grabNumbersForConns(client_conn, server_conn, numbers_map)
 	if err != nil {
-		fmt.Printf("client_n or server_n returned as nil, hence exit setInitialOffests\n")
+		fmt.Printf("LB - Error: client_n or server_n returned as nil, hence exit setInitialOffests: %v\n", err)
 		return Reroute{}, Reroute{}, err
 	}
 
@@ -262,12 +261,12 @@ func grabNumbersForConns(client_conn Connection, server_conn Connection, numbers
 
 	err := numbers_map.Lookup(client_conn, &client_n)
 	if err != nil {
-		fmt.Printf("Initial Offsets: unable to retrieve numbers for client_conn: %v\n", err)
+		fmt.Printf("LB - Initial Offsets: unable to retrieve numbers for client_conn: %v\n", err)
 	} else {
-		fmt.Printf("server.SrcPort is  %d server.DstPort is %d\n", server_conn.Src_port, server_conn.Dst_port)
+		//fmt.Printf("server.SrcPort is  %d server.DstPort is %d\n", server_conn.Src_port, server_conn.Dst_port)
 		err = numbers_map.Lookup(server_conn, &server_n)
 		if err != nil {
-			fmt.Printf("Initial Offsets: unable to retrieve numbers for server_conn: %v\n", err)
+			fmt.Printf("LB - Initial Offsets: unable to retrieve numbers for server_conn: %v\n", err)
 		}
 	}
 
@@ -276,13 +275,7 @@ func grabNumbersForConns(client_conn Connection, server_conn Connection, numbers
 
 func insertToStateMap(client_port uint32, state uint32, state_map *ebpf.Map) {
 	if err := state_map.Put(client_port, state); err != nil {
-		fmt.Printf("Unable to insert an init state for conn: %v\n", err)
-	}
-}
-
-func insertToRematchMap(client_port uint32, rematch_flag uint32, rematch_map *ebpf.Map) {
-	if err := rematch_map.Put(client_port, rematch_flag); err != nil {
-		fmt.Printf("Unable to insert an init rematch_flag for conn: %v\n", err)
+		fmt.Printf("LB - Unable to insert an init state for conn: %v\n", err)
 	}
 }
 
@@ -296,7 +289,7 @@ func insertToConnMap(conn Connection, reroute Reroute, conn_map *ebpf.Map) {
 func startListener() net.Listener {
 	ln, err := net.Listen("tcp", ":8080")
 	if err != nil {
-		fmt.Println("Error listening:", err.Error())
+		fmt.Println("LB - Error listening:", err.Error())
 		return nil
 	}
 
@@ -320,12 +313,12 @@ func acceptConnection(ln net.Listener) net.Conn {
 
 	err = tcpConn.SetNoDelay(true) // Disable Nagle's algorithm
 	if err != nil {
-		fmt.Println("Error setting TCP_NODELAY option:", err.Error())
+		fmt.Println("LB - Error setting TCP_NODELAY option:", err.Error())
 		// Handle the error gracefully, e.g., log it and continue accepting connections
 		return nil
 	}
 
-	fmt.Println("Accepted connection")
+	//fmt.Println("Accepted connection")
 	return conn
 }
 
@@ -382,7 +375,7 @@ func setUpServerConnections(no_workers int, no_clients int, available_map *ebpf.
 		for j := 0; j < no_clients; j++ {
 
 			conn_dest := fmt.Sprintf("localhost:417%d", i)
-			fmt.Println(conn_dest)
+			//fmt.Println(conn_dest)
 			conn, err := net.Dial("tcp", conn_dest)
 			if err != nil {
 				// Handle the error appropriately
@@ -409,7 +402,6 @@ func setUpServerConnections(no_workers int, no_clients int, available_map *ebpf.
 			insertToAvailableMap(conn, available_map, j, no_clients)
 		}
 	}
-	fmt.Println("Completed setting up server connections")
 }
 
 func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_clients int) {
@@ -420,7 +412,7 @@ func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_
 		Port: uint32(remAddr.Port),
 		Ip:   lo_ip,
 	}
-	fmt.Printf("Server key for available_map is .port %d and .ip %d\n", server.Port, server.Ip)
+	//fmt.Printf("Server key for available_map is .port %d and .ip %d\n", server.Port, server.Ip)
 
 	// If first index, then create new availability - else grab and update
 	connStruct := convertToConnStruct(conn)
@@ -435,7 +427,7 @@ func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_
 			fmt.Printf("not able to find avaialability for connStruct with src_p %d and dst_p %d\n", connStruct.Src_port, connStruct.Dst_port)
 		}
 	}
-	fmt.Printf("len of availability arrays: %d\n", len(availability.Conns))
+	//fmt.Printf("len of availability arrays: %d\n", len(availability.Conns))
 	availability.Conns[index] = connStruct
 	availability.Valid[index] = uint32(0)
 

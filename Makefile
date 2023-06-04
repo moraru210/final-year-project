@@ -1,16 +1,18 @@
-# SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
+.PHONY: status start clean
 
-LESSONS = $(wildcard basic*) $(wildcard packet*) $(wildcard tracing??-*)
-# LESSONS += advanced03-AF_XDP
-LESSONS_CLEAN = $(addsuffix _clean,$(LESSONS))
+start:
+	cd kernel && \
+	make && \
+	bash ./setup.sh load $(TARGET) && \
+	cd ../userspace/lb && \
+	go build && \
+	./lb 2 2
 
-.PHONY: clean $(LESSONS) $(LESSONS_CLEAN)
+clean:
+	cd kernel && \
+	bash ./setup.sh unload $(TARGET) && \
+	rm -rf /sys/fs/bpf/$(TARGET)
 
-all: $(LESSONS)
-clean: $(LESSONS_CLEAN)
-
-$(LESSONS):
-	$(MAKE) -C $@
-
-$(LESSONS_CLEAN):
-	$(MAKE) -C $(subst _clean,,$@) clean
+status:
+	cd kernel && \
+	bash ./setup.sh status

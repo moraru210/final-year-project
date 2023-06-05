@@ -4,7 +4,6 @@ package main
 #cgo CFLAGS: -g -Wall
 #include <arpa/inet.h>
 #include <stdint.h>
-#include <../../kernel/structs.h>
 */
 import "C"
 import (
@@ -35,57 +34,13 @@ var (
 	current_targets []net.Conn
 )
 
-type Connection struct {
-	Src_port uint32
-	Dst_port uint32
-	Src_ip   uint32
-	Dst_ip   uint32
-}
-
-type Reroute struct {
-	Original_conn  Connection
-	Original_index uint32
-	Seq_offset     int32
-	Ack_offset     int32
-	Rematch_flag   uint32
-	New_conn       Connection
-	New_index      uint32
-}
-
-type Numbers struct {
-	Seq_no   uint32
-	Ack_no   uint32
-	Init_seq uint32
-	Init_ack uint32
-}
-
-type Server struct {
-	Port uint32
-	Ip   uint32
-}
-
-type Availability struct {
-	Conns [C.MAX_CLIENTS]Connection
-	Valid [C.MAX_CLIENTS]uint32
-}
-
 func main() {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 
-	// //input parsing
-	// if len(os.Args) != 3 {
-	// 	fmt.Println("Usage: .\\lb <integer> <integer>")
-	// 	os.Exit(1)
-	// }
+	fmt.Println("MAX_CLIENTS: ", MAX_CLIENTS)
 
-	no_clients, err := strconv.Atoi(os.Args[1])
-	if err != nil {
-		fmt.Println("No first argument (no_clients) detected - default: 2")
-		no_clients = 2
-	}
-
-	no_workers, err := strconv.Atoi(os.Args[2])
+	no_workers, err := strconv.Atoi(os.Args[1])
 	if err != nil {
 		fmt.Println("No second argument (no_workers) detected - default: 2")
 		no_workers = 2
@@ -113,7 +68,7 @@ func main() {
 
 	// Set up servers
 	fmt.Printf("Servers - setting up connection to servers\n")
-	setUpServerConnections(no_workers, no_clients, available_map)
+	setUpServerConnections(no_workers, available_map)
 	fmt.Printf("Servers - completed servers setup\n")
 
 	// Set up listener for clients
@@ -122,14 +77,14 @@ func main() {
 
 	// // Set up rematcher
 	fmt.Printf("Rematcher - start\n")
-	go controlPanel(available_map, conn_map, numbers_map, no_clients)
+	go controlPanel(available_map, conn_map, numbers_map)
 
 	// Wait for interrupt signal
 	<-interrupt
 	fmt.Println("\nInterrupt signal received. Cleaning up...")
 }
 
-func controlPanel(available_map *ebpf.Map, conn_map *ebpf.Map, numbers_map *ebpf.Map, no_clients int) {
+func controlPanel(available_map *ebpf.Map, conn_map *ebpf.Map, numbers_map *ebpf.Map) {
 	reader := bufio.NewReader(os.Stdin)
 
 	for {
@@ -186,7 +141,7 @@ func controlPanel(available_map *ebpf.Map, conn_map *ebpf.Map, numbers_map *ebpf
 				continue
 			}
 			fmt.Println("Add:", quantity)
-			addServers(quantity, no_clients, available_map)
+			addServers(quantity, available_map)
 
 		case "remove":
 			if len(parts) != 2 {
@@ -517,26 +472,26 @@ func findAvailableConn(availability Availability) (*Connection, int) {
 	return nil, -1
 }
 
-func setUpServerConnections(no_workers int, no_clients int, available_map *ebpf.Map) {
+func setUpServerConnections(no_workers int, available_map *ebpf.Map) {
 	for i := 1; i <= no_workers; i++ {
-		for j := 0; j < no_clients; j++ {
-			newServer(i, j, available_map, no_clients)
+		for j := 0; j < MAX_CLIENTS; j++ {
+			newServer(i, j, available_map)
 		}
 	}
 	last_server_no = 4170 + no_workers
 }
 
-func addServers(quanity int, no_clients int, available_map *ebpf.Map) {
+func addServers(quanity int, available_map *ebpf.Map) {
 	start := (last_server_no - 4170) + 1
 	end := start + quanity
 	for i := start; i < end; i++ {
-		for j := 0; j < no_clients; j++ {
-			newServer(i, j, available_map, no_clients)
+		for j := 0; j < MAX_CLIENTS; j++ {
+			newServer(i, j, available_map)
 		}
 	}
 }
 
-func newServer(target_index int, conn_index int, available_map *ebpf.Map, no_clients int) {
+func newServer(target_index int, conn_index int, available_map *ebpf.Map) {
 	conn_dest := fmt.Sprintf("localhost:417%d", target_index)
 	//fmt.Println(conn_dest)
 	conn, err := net.Dial("tcp", conn_dest)
@@ -562,12 +517,12 @@ func newServer(target_index int, conn_index int, available_map *ebpf.Map, no_cli
 
 	// Insert this new connection to available map
 	// Conn in this instance is localP: X, remoteP: 417Y
-	insertToAvailableMap(conn, available_map, conn_index, no_clients)
+	insertToAvailableMap(conn, available_map, conn_index)
 
 	current_targets = append(current_targets, conn)
 }
 
-func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_clients int) {
+func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int) {
 	// Create key
 	remAddr := conn.RemoteAddr().(*net.TCPAddr)
 	lo_ip := uint32(C.inet_addr(C.CString("0x7f000001")))
@@ -582,8 +537,8 @@ func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_
 	var availability Availability
 	if index == 0 {
 		availability = Availability{
-			Conns: [C.MAX_CLIENTS]Connection{},
-			Valid: [C.MAX_CLIENTS]uint32{},
+			Conns: [MAX_CLIENTS]Connection{},
+			Valid: [MAX_CLIENTS]uint32{},
 		}
 	} else {
 		if err := available_map.Lookup(server, &availability); err != nil {

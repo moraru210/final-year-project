@@ -2,14 +2,19 @@
 
 start:
 	cd kernel && \
-	make && \
+	make MAX_CLIENTS=$(MAX_CLIENTS) && \
 	bash ./setup.sh load $(TARGET) && \
 	cd ../userspace/lb && \
+	rm -f structs.go && \
+	cd ../config && \
+	go run generate.go $(MAX_CLIENTS) && \
+	cd ../lb && \
 	go build && \
-	./lb 2 2
+	./lb 2
 
 clean:
 	cd kernel && \
+	make clean && \
 	bash ./setup.sh unload $(TARGET) && \
 	rm -rf /sys/fs/bpf/$(TARGET)
 

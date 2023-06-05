@@ -343,22 +343,8 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 	__u32 seq_no = bpf_htonl(tcph->seq);
 	__u32 ack_seq = bpf_ntohl(tcph->ack_seq);
-
-    if (tcph->ack) {
-		bpf_printk("ACK Packet - Sequence Number: %u\n", seq_no);
-        bpf_printk("ACK Packet - Acknowledge Number: %u\n", ack_seq);
-    }
     
 	int payload_len = bpf_ntohs(iph->tot_len) - (sizeof(struct iphdr) + tcph_len);
-    if (payload_len > 0) {
-        // Payload present
-        // Calculate acknowledgment number
-        __u32 seq_num = bpf_ntohl(tcph->seq);
-        __u32 ack_num = seq_num + payload_len;
-
-        // Print the payload size and predicted acknowledgment number
-        bpf_printk("Payload Size: %d bytes, Predicted Acknowledgment Number: %u\n", payload_len, ack_num);
-    }
 
 	struct connection conn = create_conn_struct(&tcph, &iph);
 
@@ -366,11 +352,11 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	struct reroute *reroute_ptr = bpf_map_lookup_elem(&conn_map, &conn);
 	if (!reroute_ptr) {
 		
-		bpf_printk("REROUTE - could not query conn_map for routing\n");
+		//bpf_printk("REROUTE - could not query conn_map for routing\n");
 		// Introduce the seq and ack into NUMBERS_STRUCT for respective CONN
 		if (tcph->syn && tcph->ack && (to_client(&conn) || from_server(&conn))) {
 			struct connection rev_conn = create_reverse_conn(&conn);
-			bpf_printk("REROUTE - rev_conn.src: %u, rev_conn.dst: %u\n", rev_conn.src_port, rev_conn.dst_port);
+			//bpf_printk("REROUTE - rev_conn.src: %u, rev_conn.dst: %u\n", rev_conn.src_port, rev_conn.dst_port);
 			if (generate_and_insert_numbers(rev_conn, &seq_no, &ack_seq) == 0) {
 				bpf_printk("ABORT - Unable to insert numbers for conn\n");
 				action = XDP_ABORTED;
@@ -381,7 +367,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 	} else {
 
-		bpf_printk("REROUTE - reroute found\n");
+		//bpf_printk("REROUTE - reroute found\n");
 		// Update NUMBERS When receiving PSH - (need to include payload in ack/seq)
 		if (tcph->psh && from_server(&conn)) {
 			struct connection rev_conn = create_reverse_conn(&conn);
@@ -415,7 +401,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 		//Check if rematch is needed
 		if (reroute_ptr->rematch_flag) {
-			bpf_printk("REMATCH - rematch flag set\n");
+			//bpf_printk("REMATCH - rematch flag set\n");
 			__u32 *state_ptr = bpf_map_lookup_elem(&state_map, &conn.src_port);
 			if (!state_ptr) {
 				bpf_printk("REMATCH - unable to retrieve state from map with conn.src %u\n", conn.src_port);
@@ -494,10 +480,10 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				__s32 s_seq_offset = server_nums_ptr->ack_no - nums_ptr->ack_no;
 				__s32 s_ack_offset = server_nums_ptr->seq_no - nums_ptr->seq_no;
 
-				bpf_printk("Server conn.seq: %u, conn.ack: %u\n", server_nums_ptr->seq_no, server_nums_ptr->ack_no);
-				bpf_printk("Client conn.seq: %u, conn.ack: %u\n", nums_ptr->seq_no, nums_ptr->ack_no);
-				bpf_printk("c_seq_offset: %d, c_ack_offset: %d", c_seq_offset, c_ack_offset);
-				bpf_printk("Client.seq after: %u, Client.ack after: %u", nums_ptr->seq_no - c_seq_offset, nums_ptr->ack_no - c_ack_offset);
+				// bpf_printk("Server conn.seq: %u, conn.ack: %u\n", server_nums_ptr->seq_no, server_nums_ptr->ack_no);
+				// bpf_printk("Client conn.seq: %u, conn.ack: %u\n", nums_ptr->seq_no, nums_ptr->ack_no);
+				// bpf_printk("c_seq_offset: %d, c_ack_offset: %d", c_seq_offset, c_ack_offset);
+				// bpf_printk("Client.seq after: %u, Client.ack after: %u", nums_ptr->seq_no - c_seq_offset, nums_ptr->ack_no - c_ack_offset);
 
 				// First correct client->LB reroute
 				reroute_ptr->original_conn = reroute_ptr->new_conn;
@@ -555,7 +541,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		iph->saddr = reroute_ptr->original_conn.src_ip;
 		iph->daddr = reroute_ptr->original_conn.dst_ip;
 			
-		bpf_printk("AFTER MODIFICATION - tcp.src: %u, tcp.dst %u\n", bpf_ntohs(tcph->source), bpf_ntohs(tcph->dest));
+		// bpf_printk("AFTER MODIFICATION - tcp.src: %u, tcp.dst %u\n", bpf_ntohs(tcph->source), bpf_ntohs(tcph->dest));
 		perform_checksums(tcph, iph, data_end);
 		action = XDP_TX;
 	}

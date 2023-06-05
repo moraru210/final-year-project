@@ -13,20 +13,21 @@ import (
 
 const (
 	templateFile  = "template"
-	outputFile    = "../lb/availability.go"
+	outputFile    = "../lb/structs.go"
 	maxClientsVar = "MAX_CLIENTS"
 )
 
 func main() {
-	maxClientsStr := os.Getenv(maxClientsVar)
-	if maxClientsStr == "" {
-		fmt.Printf("Environment variable %s is not set\n", maxClientsVar)
+	args := os.Args[1:]
+	if len(args) != 1 {
+		fmt.Printf("Usage: go run generate.go <MAX_CLIENTS>\n")
 		os.Exit(1)
 	}
 
+	maxClientsStr := args[0]
 	maxClients, err := strconv.Atoi(maxClientsStr)
 	if err != nil {
-		fmt.Printf("Invalid value for environment variable %s: %s\n", maxClientsVar, maxClientsStr)
+		fmt.Printf("Invalid value for MAX_CLIENTS: %s\n", maxClientsStr)
 		os.Exit(1)
 	}
 
@@ -42,7 +43,7 @@ func main() {
 	}
 
 	templateContent := string(templateBytes)
-	templateContent = strings.Replace(templateContent, "MAX_CLIENTS", strconv.Itoa(maxClients), 2)
+	templateContent = strings.Replace(templateContent, "MAX_CLIENTS_VAL", strconv.Itoa(maxClients), 2)
 
 	err = ioutil.WriteFile(outputFile, []byte(templateContent), 0644)
 	if err != nil {

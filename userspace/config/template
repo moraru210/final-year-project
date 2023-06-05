@@ -1,0 +1,35 @@
+package main
+
+type Connection struct {
+	Src_port uint32
+	Dst_port uint32
+	Src_ip   uint32
+	Dst_ip   uint32
+}
+
+type Reroute struct {
+	Original_conn  Connection
+	Original_index uint32
+	Seq_offset     int32
+	Ack_offset     int32
+	Rematch_flag   uint32
+	New_conn       Connection
+	New_index      uint32
+}
+
+type Numbers struct {
+	Seq_no   uint32
+	Ack_no   uint32
+	Init_seq uint32
+	Init_ack uint32
+}
+
+type Server struct {
+	Port uint32
+	Ip   uint32
+}
+
+type Availability struct {
+	Conns [MAX_CLIENTS]Connection
+	Valid [MAX_CLIENTS]uint32
+}

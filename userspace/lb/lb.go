@@ -65,8 +65,8 @@ type Server struct {
 }
 
 type Availability struct {
-	Conns [2]Connection
-	Valid [2]uint32 //signifies that conn is in use if 1
+	Conns [C.MAX_CLIENTS]Connection
+	Valid [C.MAX_CLIENTS]uint32
 }
 
 func main() {
@@ -582,8 +582,8 @@ func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_
 	var availability Availability
 	if index == 0 {
 		availability = Availability{
-			Conns: [2]Connection{},
-			Valid: [2]uint32{},
+			Conns: [C.MAX_CLIENTS]Connection{},
+			Valid: [C.MAX_CLIENTS]uint32{},
 		}
 	} else {
 		if err := available_map.Lookup(server, &availability); err != nil {

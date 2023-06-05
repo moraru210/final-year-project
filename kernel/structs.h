@@ -39,7 +39,7 @@ struct server {
 };
 
 struct availability {
-	struct connection conns[MAX_CLIENTS];
-	__u32 valid[MAX_CLIENTS];
+	struct connection Conns[MAX_CLIENTS];
+	__u32 Valid[MAX_CLIENTS];
 	//spin_lock maybe?
 };

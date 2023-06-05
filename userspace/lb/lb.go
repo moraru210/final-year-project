@@ -7,11 +7,13 @@ package main
 */
 import "C"
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	ebpf "github.com/cilium/ebpf"
@@ -27,7 +29,9 @@ const (
 )
 
 var (
-	round_robin = 0
+	round_robin     = 0
+	last_server_no  = first_server_no
+	current_targets []net.Conn
 )
 
 type Connection struct {
@@ -60,19 +64,19 @@ type Server struct {
 }
 
 type Availability struct {
-	Conns []Connection
-	Valid []uint32 //signifies that conn is in use if 1
+	Conns [2]Connection
+	Valid [2]uint32 //signifies that conn is in use if 1
 }
 
 func main() {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 
-	//input parsing
-	if len(os.Args) != 3 {
-		fmt.Println("Usage: .\\lb <integer> <integer>")
-		os.Exit(1)
-	}
+	// //input parsing
+	// if len(os.Args) != 3 {
+	// 	fmt.Println("Usage: .\\lb <integer> <integer>")
+	// 	os.Exit(1)
+	// }
 
 	no_clients, err := strconv.Atoi(os.Args[1])
 	if err != nil {
@@ -112,32 +116,174 @@ func main() {
 	fmt.Printf("Servers - completed servers setup\n")
 
 	// Set up listener for clients
-	fmt.Printf("LB - start")
+	fmt.Printf("LB - start\n")
 	go startLB(no_workers, available_map, conn_map, numbers_map)
 
 	// // Set up rematcher
-	fmt.Printf("Rematcher - start")
-	go rematchControl(available_map, conn_map)
+	fmt.Printf("Rematcher - start\n")
+	go controlPanel(available_map, conn_map, numbers_map, no_clients)
 
 	// Wait for interrupt signal
 	<-interrupt
 	fmt.Println("\nInterrupt signal received. Cleaning up...")
 }
 
-func rematchControl(available_map *ebpf.Map, conn_map *ebpf.Map) {
-	var c_no, s_no uint32
+func controlPanel(available_map *ebpf.Map, conn_map *ebpf.Map, numbers_map *ebpf.Map, no_clients int) {
+	reader := bufio.NewReader(os.Stdin)
 
 	for {
-		fmt.Print("Rematcher - Enter two integers separated by a space: \n")
-		_, err := fmt.Scanf("%d %d", &c_no, &s_no)
-		if err != nil {
-			fmt.Println("Invalid input. Please enter two integers separated by a space.")
+		fmt.Print("*** CONTROL PANEL ***\n")
+		fmt.Println("Enter your choice:")
+		fmt.Println("Options: 1. rematch <client_addr> <server_addr>")
+		fmt.Println("         2. add <quantity>")
+		fmt.Println("         3. remove <quantity>")
+
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+
+		// Split input by space to separate the command and arguments
+		parts := strings.Split(input, " ")
+
+		if len(parts) == 0 {
 			continue
 		}
 
-		fmt.Printf("Rematcher - rematch: client_no %d and server_no %d\n", c_no, s_no)
-		rematch(c_no, s_no, available_map, conn_map)
+		// Extract the command
+		command := parts[0]
+
+		// Handle the different commands
+		switch command {
+		case "rematch":
+			if len(parts) != 3 {
+				fmt.Println("Invalid number of arguments for rematch.")
+				continue
+			}
+			clientAddr := parts[1]
+			serverAddr := parts[2]
+			fmt.Printf("Rematch: client_addr=%s, server_addr=%s\n", clientAddr, serverAddr)
+			_, client_port, err := handleAddr(clientAddr)
+			if err != nil {
+				fmt.Printf("Parsing error: %v\n", err)
+				continue
+			}
+			_, server_port, err := handleAddr(serverAddr)
+			if err != nil {
+				fmt.Printf("Parsing error: %v\n", err)
+				continue
+			}
+
+			rematch(client_port, server_port, available_map, conn_map)
+
+		case "add":
+			if len(parts) != 2 {
+				fmt.Println("Invalid number of arguments for add.")
+				continue
+			}
+			quantity, err := strconv.Atoi(parts[1])
+			if err != nil {
+				fmt.Println("Invalid quantity for add.")
+				continue
+			}
+			fmt.Println("Add:", quantity)
+			addServers(quantity, no_clients, available_map)
+
+		case "remove":
+			if len(parts) != 2 {
+				fmt.Println("Invalid number of arguments for rematch.")
+				continue
+			}
+			serverAddr := parts[1]
+			fmt.Printf("Remove: server_addr=%s\n", serverAddr)
+			_, server_port, err := handleAddr(serverAddr)
+			if err != nil {
+				fmt.Printf("Parsing error: %v\n", err)
+				continue
+			}
+			removeTarget(server_port, numbers_map, available_map)
+
+		default:
+			fmt.Println("Invalid command.")
+		}
+
+		fmt.Printf("Size of current target connections: %d\n", len(current_targets))
+
+		fmt.Print("*********\n")
 	}
+}
+
+func removeTarget(target_port uint32, numbers_map *ebpf.Map, available_map *ebpf.Map) {
+	// Assumption: there is no session left utilising this server
+	to_delete := delete_from_current(target_port)
+
+	delete_from_numbers_map(to_delete, numbers_map)
+	delete_from_available_map(target_port, available_map)
+
+	for _, conn := range to_delete {
+		conn.Close()
+	}
+}
+
+func delete_from_available_map(target_port uint32, available_map *ebpf.Map) {
+	server := Server{
+		Port: target_port,
+		Ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
+	}
+
+	available_map.Delete(server)
+}
+
+func delete_from_numbers_map(to_delete []net.Conn, numbers_map *ebpf.Map) {
+	for _, conn := range to_delete {
+		remote_addr := conn.RemoteAddr().(*net.TCPAddr)
+		local_addr := conn.LocalAddr().(*net.TCPAddr)
+
+		key := Connection{
+			Src_port: uint32(local_addr.Port),
+			Dst_port: uint32(remote_addr.Port),
+			Src_ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
+			Dst_ip:   uint32(C.inet_addr(C.CString("0x7f000001"))),
+		}
+
+		numbers_map.Delete(key)
+	}
+}
+
+func delete_from_current(target_port uint32) []net.Conn {
+	var to_delete []net.Conn
+	for i := 0; i < len(current_targets); i++ {
+		current_conn := current_targets[i]
+		remote_addr := current_conn.RemoteAddr().(*net.TCPAddr)
+		if uint32(remote_addr.Port) == target_port {
+			to_delete = append(to_delete, current_conn)
+			current_targets = append(current_targets[:i], current_targets[i+1:]...)
+			i--
+		}
+	}
+	return to_delete
+}
+
+func handleAddr(address string) (net.IP, uint32, error) {
+	host, portString, err := net.SplitHostPort(address)
+	if err != nil {
+		fmt.Println("Invalid address:", err)
+		return nil, 0, err
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		fmt.Println("Invalid IP address")
+		return nil, 0, err
+	}
+
+	port, err := strconv.ParseUint(portString, 10, 32)
+	if err != nil {
+		fmt.Println("Invalid port number:", err)
+		return nil, 0, err
+	}
+
+	fmt.Println("IP:", ip.String())
+	fmt.Println("Port:", uint32(port))
+	return ip, uint32(port), nil
 }
 
 func rematch(client_src_port, server_no uint32, available_map *ebpf.Map, conn_map *ebpf.Map) {
@@ -373,35 +519,51 @@ func findAvailableConn(availability Availability) (*Connection, int) {
 func setUpServerConnections(no_workers int, no_clients int, available_map *ebpf.Map) {
 	for i := 1; i <= no_workers; i++ {
 		for j := 0; j < no_clients; j++ {
-
-			conn_dest := fmt.Sprintf("localhost:417%d", i)
-			//fmt.Println(conn_dest)
-			conn, err := net.Dial("tcp", conn_dest)
-			if err != nil {
-				// Handle the error appropriately
-				fmt.Printf("<i: %d, j: %d> Failed to connect to localhost:417%d: %v\n", i, j, i, err)
-				os.Exit(1)
-			}
-
-			// Set the socket options
-			tcpConn := conn.(*net.TCPConn)
-			tcpConn.SetLinger(0)
-			// Disable TCP keep-alive on the accepted connection
-			tcpConn.SetKeepAlive(false)
-			tcpConn.SetKeepAlivePeriod(0)
-
-			err = tcpConn.SetNoDelay(true) // Disable Nagle's algorithm
-			if err != nil {
-				fmt.Println("Error setting TCP_NODELAY option:", err.Error())
-				// Handle the error gracefully, e.g., log it and continue accepting connections
-				os.Exit(1)
-			}
-
-			// Insert this new connection to available map
-			// Conn in this instance is localP: X, remoteP: 417Y
-			insertToAvailableMap(conn, available_map, j, no_clients)
+			newServer(i, j, available_map, no_clients)
 		}
 	}
+	last_server_no = 4170 + no_workers
+}
+
+func addServers(quanity int, no_clients int, available_map *ebpf.Map) {
+	start := (last_server_no - 4170) + 1
+	end := start + quanity
+	for i := start; i < end; i++ {
+		for j := 0; j < no_clients; j++ {
+			newServer(i, j, available_map, no_clients)
+		}
+	}
+}
+
+func newServer(target_index int, conn_index int, available_map *ebpf.Map, no_clients int) {
+	conn_dest := fmt.Sprintf("localhost:417%d", target_index)
+	//fmt.Println(conn_dest)
+	conn, err := net.Dial("tcp", conn_dest)
+	if err != nil {
+		// Handle the error appropriately
+		fmt.Printf("<i: %d, j: %d> Failed to connect to localhost:417%d: %v\n", target_index, conn_index, target_index, err)
+		os.Exit(1)
+	}
+
+	// Set the socket options
+	tcpConn := conn.(*net.TCPConn)
+	tcpConn.SetLinger(0)
+	// Disable TCP keep-alive on the accepted connection
+	tcpConn.SetKeepAlive(false)
+	tcpConn.SetKeepAlivePeriod(0)
+
+	err = tcpConn.SetNoDelay(true) // Disable Nagle's algorithm
+	if err != nil {
+		fmt.Println("Error setting TCP_NODELAY option:", err.Error())
+		// Handle the error gracefully, e.g., log it and continue accepting connections
+		os.Exit(1)
+	}
+
+	// Insert this new connection to available map
+	// Conn in this instance is localP: X, remoteP: 417Y
+	insertToAvailableMap(conn, available_map, conn_index, no_clients)
+
+	current_targets = append(current_targets, conn)
 }
 
 func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_clients int) {
@@ -419,8 +581,8 @@ func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, no_
 	var availability Availability
 	if index == 0 {
 		availability = Availability{
-			Conns: make([]Connection, no_clients),
-			Valid: make([]uint32, no_clients),
+			Conns: [2]Connection{},
+			Valid: [2]uint32{},
 		}
 	} else {
 		if err := available_map.Lookup(server, &availability); err != nil {

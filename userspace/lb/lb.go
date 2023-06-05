@@ -4,6 +4,7 @@ package main
 #cgo CFLAGS: -g -Wall
 #include <arpa/inet.h>
 #include <stdint.h>
+#include <../../kernel/structs.h>
 */
 import "C"
 import (

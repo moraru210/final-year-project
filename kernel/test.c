@@ -367,6 +367,75 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 	} else {
 
+		if (tcph->rst && from_client(&conn)) {
+			
+			struct numbers *numbers_elem_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
+			if (!numbers_elem_ptr) {
+				bpf_printk("could not find numbers elem in numbers map");
+				bpf_printk("ABORT PACKET");
+				action = XDP_ABORTED;
+				goto OUT;
+			} else {
+				
+				if (bpf_map_delete_elem(&numbers_map, &conn)) {
+					bpf_printk("unable to delete numbers from numbers map for conn");
+				}
+				tcph->seq = bpf_htonl(numbers_elem_ptr->init_seq);
+				tcph->ack_seq = bpf_htonl(numbers_elem_ptr->init_ack);
+
+				perform_checksums(tcph, iph, data_end);
+			}
+
+			//create the worker struct
+			//grab avaialability from available map
+			//set valid[reroute.index] = 0 (not in use anymore)
+			struct server server = create_server_struct(&reroute_ptr->original_conn);
+			struct availability *availability_ptr = bpf_map_lookup_elem(&available_map, &server);
+			if (!availability_ptr) {
+				bpf_printk("could not find avaialability in order to invalidate reroute.original");
+				bpf_printk("ABORT PACKET");
+				action = XDP_ABORTED;
+				goto OUT;
+			} else {
+				struct availability availability = *(availability_ptr);
+				__u32 index = reroute_ptr->original_index;
+				__u32 max_size = sizeof(availability.conns) / sizeof(availability.conns[0]);
+				if (index >= max_size) {
+					bpf_printk("index: %u", index);
+					bpf_printk("ABORT PACKET");
+					action = XDP_ABORTED;
+					goto OUT;
+				} else {
+					availability_ptr->valid[index] = 0;
+				}
+
+				//need to update available_map with new availability information
+				if (bpf_map_update_elem(&available_map, &server, availability_ptr, 0) < 0) {
+					bpf_printk("unable to update available_map to invalidate old map");
+					bpf_printk("ABORT PACKET");
+					action = XDP_ABORTED;
+					goto OUT;
+				}
+			}
+
+			if (bpf_map_delete_elem(&conn_map, &conn)) {
+				bpf_printk("unable to delete client_conn from conn map");
+				bpf_printk("ABORT PACKET");
+				action = XDP_ABORTED;
+				goto OUT;
+			}
+
+			struct connection rev_original_conn = create_reverse_conn(&reroute_ptr->original_conn);
+			if (bpf_map_delete_elem(&conn_map, &rev_original_conn)) {
+				bpf_printk("unable to delete rev(original_conn) from conn map");
+				bpf_printk("ABORT PACKET");
+				action = XDP_ABORTED;
+				goto OUT;
+			}			
+		
+			goto OUT;
+		}
+
 		//bpf_printk("REROUTE - reroute found\n");
 		// Update NUMBERS When receiving PSH - (need to include payload in ack/seq)
 		if (tcph->psh && from_server(&conn)) {

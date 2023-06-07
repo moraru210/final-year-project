@@ -423,7 +423,7 @@ func acceptConnection(ln net.Listener) net.Conn {
 }
 
 func chooseServerConn(no_workers int, available_map *ebpf.Map) (*Connection, int) {
-	chosen_server_port := first_server_no // + (round_robin % no_workers)
+	chosen_server_port := first_server_no + (round_robin % no_workers)
 	round_robin += 1
 	chosen_server := Server{
 		Port: uint32(chosen_server_port),

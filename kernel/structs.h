@@ -4,10 +4,14 @@
 #define MAX_CLIENTS 2
 #endif
 
+#ifndef MAX_SERVERS
+#define MAX_SERVERS 2
+#endif
+
 
 #define LB_LISTENER_PORT 8080
 #define MIN_SERVER_PORT 4171
-#define MAX_SERVER_PORT (4170+MAX_CLIENTS) 
+#define MAX_SERVER_PORT (4170+MAX_SERVERS) 
 
 struct connection {
 	__u32 src_port;

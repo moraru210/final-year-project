@@ -400,7 +400,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		}
 
 		//Check if rematch is needed
-		if (reroute_ptr->rematch_flag) {
+		if (reroute_ptr->rematch_flag == 1) {
 			//bpf_printk("REMATCH - rematch flag set\n");
 			__u32 *state_ptr = bpf_map_lookup_elem(&state_map, &conn.src_port);
 			if (!state_ptr) {
@@ -458,9 +458,8 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				}
 
 				struct connection rev_server = create_reverse_conn(&reroute_ptr->original_conn);
-				struct reroute *rev_reroute = bpf_map_lookup_elem(&conn_map, &rev_server);
-				if (!rev_reroute) {
-					bpf_printk("REMATCH - Unable to retrieve reroute object for (conn.src %u, conn.dst %u)\n", rev_server.src_port, rev_server.dst_port);
+				if (bpf_map_delete_elem(&conn_map, &rev_server) < 0) {
+					bpf_printk("REMATCH - Unable to delete reroute object for (conn.src %u, conn.dst %u)\n", rev_server.src_port, rev_server.dst_port);
 					action = XDP_ABORTED;
 					goto OUT;
 				}
@@ -499,23 +498,20 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				}
 
 				// Next correct server->LB reroute
-				rev_reroute->original_conn = rev_reroute->new_conn;
-				rev_reroute->original_index = rev_reroute->new_index;
-				rev_reroute->seq_offset = s_seq_offset;
-				rev_reroute->ack_offset = s_ack_offset;
+				struct reroute rev_reroute;
+				rev_reroute.original_conn = create_reverse_conn(&conn);
+				rev_reroute.seq_offset = s_seq_offset;
+				rev_reroute.ack_offset = s_ack_offset;
+				rev_reroute.original_index = 0;
+				rev_reroute.new_index = 0;
+				rev_reroute.new_conn = rev_reroute.original_conn;
 				struct connection rev_new_server = create_reverse_conn(&reroute_ptr->new_conn);
 
-				if (bpf_map_update_elem(&conn_map, &rev_new_server, rev_reroute, 0) < 0) {
-					bpf_printk("REMATCH - Unable to upate reroute object for (conn.src %u, conn.dst %u)\n", rev_server.src_port, rev_server.dst_port);
+				if (bpf_map_update_elem(&conn_map, &rev_new_server, &rev_reroute, 0) < 0) {
+					bpf_printk("REMATCH - Unable to upate reroute object for (conn.src %u, conn.dst %u)\n", rev_new_server.src_port, rev_new_server.dst_port);
 					action = XDP_ABORTED;
 					goto OUT;
-				}
-
-				if (bpf_map_delete_elem(&conn_map, &rev_server) < 0) {
-					bpf_printk("REMATCH - Unable to delete previous reroute (conn.src %u, conn.dst %u)\n", rev_server.src_port, rev_server.dst_port);
-					action = XDP_ABORTED;
-					goto OUT;
-				}				
+				}			
 			}
 		}
 

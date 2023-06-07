@@ -161,8 +161,6 @@ func controlPanel(available_map *ebpf.Map, conn_map *ebpf.Map, numbers_map *ebpf
 			fmt.Println("Invalid command.")
 		}
 
-		fmt.Printf("Size of current target connections: %d\n", len(current_targets))
-
 		fmt.Print("*********\n")
 	}
 }
@@ -425,7 +423,7 @@ func acceptConnection(ln net.Listener) net.Conn {
 }
 
 func chooseServerConn(no_workers int, available_map *ebpf.Map) (*Connection, int) {
-	chosen_server_port := first_server_no + (round_robin % no_workers)
+	chosen_server_port := first_server_no // + (round_robin % no_workers)
 	round_robin += 1
 	chosen_server := Server{
 		Port: uint32(chosen_server_port),
@@ -443,6 +441,7 @@ func grabServerConn(server Server, available_map *ebpf.Map) (*Connection, int) {
 	}
 
 	conn_ptr, index := findAvailableConn(availability)
+	fmt.Printf("Found at index: %d\n", index)
 	if conn_ptr == nil {
 		fmt.Printf("Unable to find a valid connection in availability struct\n")
 		return nil, -1
@@ -464,9 +463,10 @@ func grabServerConn(server Server, available_map *ebpf.Map) (*Connection, int) {
 }
 
 func findAvailableConn(availability Availability) (*Connection, int) {
-	for i, conn := range availability.Conns {
+	for i := 0; i < len(availability.Valid); i++ {
+		fmt.Printf("Index: %d, valid: %d, conn.src: %d\n", i, availability.Valid[i], availability.Conns[i].Src_port)
 		if availability.Valid[i] == 0 {
-			return &conn, i
+			return &availability.Conns[i], i
 		}
 	}
 	return nil, -1

@@ -1,4 +1,4 @@
-XDP_TARGETS  := test
+XDP_TARGETS  := kernel
 
 LLC ?= llc
 CLANG ?= clang
@@ -51,6 +51,7 @@ $(XDP_OBJ): %.o: %.c  Makefile $(OBJECT_LIBBPF)
 	$(CLANG) -S \
 	    -target bpf \
 		-D MAX_CLIENTS=$(MAX_CLIENTS) \
+		-D MAX_SERVERS=$(MAX_SERVERS) \
 	    -D __BPF_TRACING__ \
 	    $(BPF_CFLAGS) \
 	    -Wall \

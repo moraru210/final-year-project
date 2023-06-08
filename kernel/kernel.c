@@ -1,3 +1,4 @@
+#include <linux/in.h>
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
@@ -8,8 +9,6 @@
 #include <linux/ip.h>
 #include <linux/ipv6.h>
 #include <linux/tcp.h>
-
-#include "./structs.h"
 
 #define max(a,b)             \
 ({                           \
@@ -23,6 +22,52 @@
 #define VLAN_MAX_DEPTH 4
 #endif
 
+#ifndef MAX_CLIENTS
+#define MAX_CLIENTS 10
+#endif
+
+#ifndef MAX_SERVERS
+#define MAX_SERVERS 10
+#endif
+
+#define LB_LISTENER_PORT 8080
+#define MIN_SERVER_PORT 4171
+#define MAX_SERVER_PORT (4170+MAX_SERVERS) 
+
+struct connection {
+	__u32 src_port;
+	__u32 dst_port;
+	__u32 src_ip;
+	__u32 dst_ip;
+};
+
+struct reroute {
+	struct connection original_conn;
+	__u32 original_index;
+    __s32 seq_offset;
+	__s32 ack_offset;
+     __u32 rematch_flag;
+    struct connection new_conn;
+	__u32 new_index;
+};
+
+struct numbers {
+	__u32 seq_no;
+	__u32 ack_no;
+	__u32 init_seq;
+	__u32 init_ack;
+};
+
+struct server {
+	__u32 port;
+	__u32 ip;
+};
+
+struct availability {
+	struct connection conns[MAX_CLIENTS];
+	__u32 valid[MAX_CLIENTS];
+};
+
 // /* Define maps */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -34,7 +79,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 3*MAX_CLIENTS);
+	__uint(max_entries, MAX_SERVERS*MAX_CLIENTS);
 	__type(key, struct connection);
 	__type(value, struct numbers);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);

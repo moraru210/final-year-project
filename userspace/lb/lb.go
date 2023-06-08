@@ -38,7 +38,9 @@ func main() {
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 
 	fmt.Println("MAX_CLIENTS: ", MAX_CLIENTS)
+	fmt.Println("MAX_SERVERS: ", MAX_SERVERS)
 
+	//initial number of servers
 	no_workers, err := strconv.Atoi(os.Args[1])
 	if err != nil {
 		fmt.Println("No second argument (no_workers) detected - default: 2")
@@ -466,9 +468,10 @@ func findAvailableConn(availability Availability) (*Connection, int) {
 }
 
 func setUpServerConnections(no_workers int, available_map *ebpf.Map) {
-	for i := 1; i <= no_workers; i++ {
+	for i := 0; i < no_workers; i++ {
 		for j := 0; j < MAX_CLIENTS; j++ {
-			newServer(i, j, available_map)
+			server := first_server_no + i
+			newServer(server, j, available_map)
 		}
 	}
 	last_server_no = 4170 + no_workers
@@ -477,20 +480,24 @@ func setUpServerConnections(no_workers int, available_map *ebpf.Map) {
 func addServers(quanity int, available_map *ebpf.Map) {
 	start := (last_server_no - 4170) + 1
 	end := start + quanity
+	if end-1 > MAX_SERVERS {
+		fmt.Printf("Unable to add %d, since it will become above limit\n", quanity)
+	}
 	for i := start; i < end; i++ {
 		for j := 0; j < MAX_CLIENTS; j++ {
 			newServer(i, j, available_map)
 		}
 	}
+	last_server_no = end - 1
 }
 
 func newServer(target_index int, conn_index int, available_map *ebpf.Map) {
-	conn_dest := fmt.Sprintf("localhost:417%d", target_index)
+	conn_dest := fmt.Sprintf("localhost:%d", target_index)
 	//fmt.Println(conn_dest)
 	conn, err := net.Dial("tcp", conn_dest)
 	if err != nil {
 		// Handle the error appropriately
-		fmt.Printf("<i: %d, j: %d> Failed to connect to localhost:417%d: %v\n", target_index, conn_index, target_index, err)
+		fmt.Printf("<i: %d, j: %d> Failed to connect to localhost:%d: %v\n", target_index, conn_index, target_index, err)
 		os.Exit(1)
 	}
 

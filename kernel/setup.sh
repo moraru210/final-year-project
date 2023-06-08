@@ -17,7 +17,7 @@ case "$1" in
         exit 1
     fi
     echo "Loading XDP program on $2..."
-    $XDP_LOADER_PATH load -m skb $2 test.o --pin-path /sys/fs/bpf/$2 -v -s xdp_tcp
+    $XDP_LOADER_PATH load -m skb $2 kernel.o --pin-path /sys/fs/bpf/$2 -v -s xdp_tcp
     if [ $? -ne 0 ]; then
         echo "Failed to load XDP program on $2."
         exit 1

@@ -243,7 +243,6 @@ static inline __u16 l4_checksum(struct iphdr *iph, void *l4, void *data_end)
     csum += *(((__u16 *) &(iph->daddr))+1); // 2nd 2 bytes
     csum += bpf_htons((__u16)iph->protocol); // protocol is a u8
     csum += bpf_htons((__u16)(data_end - (void *)l4)); 
-	// return (csum >> 16);
     return generic_checksum((unsigned short *) l4, data_end, csum, 1480);
 }
 
@@ -261,8 +260,8 @@ static inline struct connection create_conn_struct(struct tcphdr **tcph, struct 
 	conn.src_port = bpf_ntohs((*tcph)->source);
 	conn.dst_port = bpf_ntohs((*tcph)->dest);
 	bpf_printk("CONN - src port: %u, dst port: %u", conn.src_port, conn.dst_port);
-	conn.src_ip = (*iph)->saddr;
-	conn.dst_ip = (*iph)->daddr;
+	conn.src_ip = bpf_ntohl((*iph)->saddr);
+	conn.dst_ip = bpf_ntohl((*iph)->daddr);
 	bpf_printk("ip header saddr: %u, daddr: %u", conn.src_ip, conn.dst_ip);
 	return conn;
 }
@@ -283,15 +282,6 @@ static inline int from_client(struct connection *conn)
 	}
 	return 0;
 }
-
-// static inline int to_server(struct connection *conn)
-// {
-// 	if (conn->dst_port >= MIN_SERVER_PORT 
-// 		&& conn->dst_port <= MAX_SERVER_PORT) {
-// 			return 1;
-// 		}
-// 	return 0;
-// }
 
 static inline int to_client(struct connection *conn)
 {
@@ -657,8 +647,10 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		modify_seq_ack(&tcph, reroute_ptr->seq_offset, reroute_ptr->ack_offset);
 		tcph->source = bpf_htons(reroute_ptr->original_conn.src_port);
 		tcph->dest = bpf_htons(reroute_ptr->original_conn.dst_port);
-		iph->saddr = reroute_ptr->original_conn.src_ip;
-		iph->daddr = reroute_ptr->original_conn.dst_ip;
+		bpf_printk("Ip in N is: %u", reroute_ptr->original_conn.src_ip);
+		bpf_printk("IP in H is: %u", bpf_ntohl(reroute_ptr->original_conn.src_ip));
+		iph->saddr = bpf_htonl(reroute_ptr->original_conn.src_ip);
+		iph->daddr = bpf_htonl(reroute_ptr->original_conn.dst_ip);
 			
 		// bpf_printk("AFTER MODIFICATION - tcp.src: %u, tcp.dst %u\n", bpf_ntohs(tcph->source), bpf_ntohs(tcph->dest));
 		perform_checksums(tcph, iph, data_end);

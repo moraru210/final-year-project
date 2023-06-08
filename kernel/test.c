@@ -26,7 +26,7 @@
 // /* Define maps */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 30);
+	__uint(max_entries, 3*MAX_CLIENTS);
 	__type(key, struct connection);
 	__type(value, struct reroute);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
@@ -34,7 +34,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 30);
+	__uint(max_entries, 3*MAX_CLIENTS);
 	__type(key, struct connection);
 	__type(value, struct numbers);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
@@ -42,7 +42,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 30);
+	__uint(max_entries, MAX_SERVERS);
 	__type(key, struct server);
 	__type(value, struct availability);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
@@ -50,8 +50,8 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 30);
-	__type(key, __u32);
+	__uint(max_entries, MAX_CLIENTS);
+	__type(key, struct server);
 	__type(value, __u32);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } state_map SEC(".maps");
@@ -471,7 +471,10 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		//Check if rematch is needed
 		if (reroute_ptr->rematch_flag == 1) {
 			//bpf_printk("REMATCH - rematch flag set\n");
-			__u32 *state_ptr = bpf_map_lookup_elem(&state_map, &conn.src_port);
+			struct server client;
+			client.ip = conn.src_ip;
+			client.port = conn.src_port;
+			__u32 *state_ptr = bpf_map_lookup_elem(&state_map, &client);
 			if (!state_ptr) {
 				bpf_printk("REMATCH - unable to retrieve state from map with conn.src %u\n", conn.src_port);
 				action = XDP_ABORTED;
@@ -587,14 +590,20 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		// Update state to be zero
 		if (payload_len > 0 && from_client(&conn)) {
 			__u32 zero = 0;
-			if (bpf_map_update_elem(&state_map, &conn.src_port, &zero, 0) < 0) {
+			struct server client;
+			client.ip = conn.src_ip;
+			client.port = conn.src_port;
+			if (bpf_map_update_elem(&state_map, &client, &zero, 0) < 0) {
 				bpf_printk("STATE - unable to change state to 0 for conn.src: %u\n", conn.src_port);
 				action = XDP_ABORTED;
 				goto OUT;
 			}
 		} else if (payload_len > 0 && from_server(&conn)) {
 			__u32 one = 1;
-			if (bpf_map_update_elem(&state_map, &reroute_ptr->original_conn.dst_port, &one, 0) < 0) {
+			struct server client;
+			client.ip = reroute_ptr->original_conn.dst_ip;
+			client.port = reroute_ptr->original_conn.dst_port;
+			if (bpf_map_update_elem(&state_map, &client, &one, 0) < 0) {
 				bpf_printk("STATE - unable to change state to 1 for original_conn.dst: %u\n", reroute_ptr->original_conn.dst_port);
 			}
 		}

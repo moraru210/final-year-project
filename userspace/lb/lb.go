@@ -23,7 +23,6 @@ const (
 	connection_map_path = "/sys/fs/bpf/lo/conn_map"
 	numbers_map_path    = "/sys/fs/bpf/lo/numbers_map"
 	available_map_path  = "/sys/fs/bpf/lo/available_map"
-	state_map_path      = "/sys/fs/bpf/lo/state_map"
 	rematch_map_path    = "/sys/fs/bpf/lo/rematch_map"
 	first_server_no     = 4171
 )
@@ -371,12 +370,6 @@ func grabNumbersForConns(client_conn Connection, server_conn Connection, numbers
 	}
 
 	return client_n, server_n, err
-}
-
-func insertToStateMap(client_port uint32, state uint32, state_map *ebpf.Map) {
-	if err := state_map.Put(client_port, state); err != nil {
-		fmt.Printf("LB - Unable to insert an init state for conn: %v\n", err)
-	}
 }
 
 func insertToConnMap(conn Connection, reroute Reroute, conn_map *ebpf.Map) {

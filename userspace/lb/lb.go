@@ -139,11 +139,11 @@ func controlPanel(available_map *ebpf.Map, conn_map *ebpf.Map, numbers_map *ebpf
 
 		case "add":
 			if len(parts) != 2 {
-				fmt.Println("Invalid number of arguments for rematch.")
+				fmt.Println("Invalid number of arguments for add.")
 				continue
 			}
 			serverAddr := parts[1]
-			fmt.Printf("Remove: server_addr=%s\n", serverAddr)
+			fmt.Printf("Add: server_addr=%s\n", serverAddr)
 			server_ip, server_port, err := handleAddr(serverAddr)
 			if err != nil {
 				fmt.Printf("Parsing error: %v\n", err)
@@ -153,7 +153,7 @@ func controlPanel(available_map *ebpf.Map, conn_map *ebpf.Map, numbers_map *ebpf
 
 		case "remove":
 			if len(parts) != 2 {
-				fmt.Println("Invalid number of arguments for rematch.")
+				fmt.Println("Invalid number of arguments for remove.")
 				continue
 			}
 			serverAddr := parts[1]
@@ -274,10 +274,17 @@ func rematch(client_src_port uint32, client_ip net.IP, server_no uint32, server_
 		fmt.Printf("Rematcher - Error: Not able to lookup reroute for given client_conn: %v\n", err)
 		return
 	}
+
+	var nums Numbers
+	if err := conn_map.Lookup(client_conn, &nums); err != nil {
+		fmt.Printf("Rematcher - Error: Not able to lookup numbers for given client_conn: %v\n", err)
+		return
+	}
 	//fmt.Printf("Rematcher - check: original_conn.src %d, original_conn.dst %d\n", reroute.Original_conn.Src_port, reroute.Original_conn.Dst_port)
 
 	reroute.New_conn = *server_conn
 	reroute.New_index = uint32(index)
+	reroute.New_eth = nums.Cur_Eth
 	reroute.Rematch_flag = uint32(1)
 
 	if err := conn_map.Put(client_conn, reroute); err != nil {

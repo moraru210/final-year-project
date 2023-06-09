@@ -338,13 +338,6 @@ static inline struct server create_server_struct(struct connection *conn)
 	return server;
 }
 
-static inline void reverse_eth(struct eth_conn *cur_eth) {
-	__u8 temp[ETH_ALEN];
-	__builtin_memcpy(temp, cur_eth->src.addr, ETH_ALEN);
-	__builtin_memcpy(cur_eth->src.addr, cur_eth->dst.addr, sizeof(struct eth_addr));
-	__builtin_memcpy(cur_eth->dst.addr, temp, sizeof(struct eth_addr));
-}
-
 SEC("xdp_tcp")
 int  xdp_prog_tcp(struct xdp_md *ctx)
 {
@@ -388,9 +381,9 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 	struct connection conn = create_conn_struct(&tcph, &iph);
 
-	struct eth_conn cur_eth;
-	__builtin_memcpy(cur_eth.src.addr, ethh->h_source, sizeof(struct eth_addr));
-	__builtin_memcpy(cur_eth.src.addr, ethh->h_dest, sizeof(struct eth_addr));
+	// struct eth_conn cur_eth;
+	// __builtin_memcpy(cur_eth.src.addr, ethh->h_source, sizeof(struct eth_addr));
+	// __builtin_memcpy(cur_eth.src.addr, ethh->h_dest, sizeof(struct eth_addr));
 
 	// Query map for possible routing
 	struct reroute *reroute_ptr = bpf_map_lookup_elem(&conn_map, &conn);
@@ -400,9 +393,11 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		// Introduce the seq and ack into NUMBERS_STRUCT for respective CONN
 		if (tcph->syn && tcph->ack) {
 			struct connection rev_conn = create_reverse_conn(&conn);
-			reverse_eth(&cur_eth);
+			struct eth_conn rev_cur;
+			__builtin_memcpy(rev_cur.src.addr, ethh->h_dest, sizeof(struct eth_addr));
+			__builtin_memcpy(rev_cur.dst.addr, ethh->h_source, sizeof(struct eth_addr));
 			//bpf_printk("REROUTE - rev_conn.src: %u, rev_conn.dst: %u\n", rev_conn.src_port, rev_conn.dst_port);
-			if (generate_and_insert_numbers(rev_conn, &seq_no, &ack_seq, &cur_eth) == 0) {
+			if (generate_and_insert_numbers(rev_conn, &seq_no, &ack_seq, &rev_cur) == 0) {
 				bpf_printk("ABORT - Unable to insert numbers for conn\n");
 				action = XDP_ABORTED;
 				goto OUT;
@@ -596,14 +591,15 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				__s32 s_seq_offset = server_nums_ptr->ack_no - nums_ptr->ack_no;
 				__s32 s_ack_offset = server_nums_ptr->seq_no - nums_ptr->seq_no;
 
-				// bpf_printk("Server conn.seq: %u, conn.ack: %u\n", server_nums_ptr->seq_no, server_nums_ptr->ack_no);
-				// bpf_printk("Client conn.seq: %u, conn.ack: %u\n", nums_ptr->seq_no, nums_ptr->ack_no);
-				// bpf_printk("c_seq_offset: %d, c_ack_offset: %d", c_seq_offset, c_ack_offset);
-				// bpf_printk("Client.seq after: %u, Client.ack after: %u", nums_ptr->seq_no - c_seq_offset, nums_ptr->ack_no - c_ack_offset);
+				// // bpf_printk("Server conn.seq: %u, conn.ack: %u\n", server_nums_ptr->seq_no, server_nums_ptr->ack_no);
+				// // bpf_printk("Client conn.seq: %u, conn.ack: %u\n", nums_ptr->seq_no, nums_ptr->ack_no);
+				// // bpf_printk("c_seq_offset: %d, c_ack_offset: %d", c_seq_offset, c_ack_offset);
+				// // bpf_printk("Client.seq after: %u, Client.ack after: %u", nums_ptr->seq_no - c_seq_offset, nums_ptr->ack_no - c_ack_offset);
 
-				// First correct client->LB reroute
+				// // First correct client->LB reroute
 				reroute_ptr->original_conn = reroute_ptr->new_conn;
 				reroute_ptr->original_index = reroute_ptr->new_index;
+				reroute_ptr->original_eth = reroute_ptr->new_eth;
 				reroute_ptr->seq_offset = c_seq_offset;
 				reroute_ptr->ack_offset = c_ack_offset;
 				reroute_ptr->rematch_flag = 0;
@@ -614,13 +610,16 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 					goto OUT;
 				}
 
-				// Next correct server->LB reroute
 				struct reroute rev_reroute;
 				rev_reroute.original_conn = create_reverse_conn(&conn);
+				__builtin_memcpy(rev_reroute.original_eth.src.addr, ethh->h_dest, ETH_ALEN);
+				__builtin_memcpy(rev_reroute.original_eth.dst.addr, ethh->h_source, ETH_ALEN);
 				rev_reroute.seq_offset = s_seq_offset;
 				rev_reroute.ack_offset = s_ack_offset;
 				rev_reroute.original_index = 0;
 				rev_reroute.new_index = 0;
+				__builtin_memcpy(rev_reroute.new_eth.src.addr, ethh->h_dest, ETH_ALEN);
+				__builtin_memcpy(rev_reroute.new_eth.dst.addr, ethh->h_source, ETH_ALEN);
 				rev_reroute.new_conn = rev_reroute.original_conn;
 				struct connection rev_new_server = create_reverse_conn(&reroute_ptr->new_conn);
 

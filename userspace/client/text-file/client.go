@@ -21,14 +21,14 @@ func main() {
 	fmt.Println("Address is: ", address)
 	// Connect to the netcat listener
 
-	// localAddr := &net.TCPAddr{
-	// 	IP:   net.ParseIP("127.0.0.1"),
-	// 	Port: 0,
-	// }
-	// dialer := &net.Dialer{
-	// 	LocalAddr: localAddr,
-	// }
-	conn, err := net.Dial("tcp", address)
+	localAddr := &net.TCPAddr{
+		IP:   net.ParseIP("0.0.0.0"),
+		Port: 5000,
+	}
+	dialer := &net.Dialer{
+		LocalAddr: localAddr,
+	}
+	conn, err := dialer.Dial("tcp", address)
 	if err != nil {
 		panic(err)
 	}

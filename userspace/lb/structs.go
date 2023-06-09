@@ -1,7 +1,7 @@
 package main
 
-const MAX_CLIENTS = MAX_CLIENTS_VAL
-const MAX_SERVERS = MAX_SERVERS_VAL
+const MAX_CLIENTS = 10
+const MAX_SERVERS = 10
 const ETH_ALEN = 6
 
 type Connection struct {

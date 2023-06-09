@@ -34,6 +34,15 @@
 #define MIN_SERVER_PORT 4171
 #define MAX_SERVER_PORT (4170+MAX_SERVERS) 
 
+struct eth_addr {
+	__u8 addr[ETH_ALEN];
+};
+
+struct eth_conn {
+	struct eth_addr src;
+	struct eth_addr dst;
+};
+
 struct connection {
 	__u32 src_port;
 	__u32 dst_port;
@@ -42,13 +51,15 @@ struct connection {
 };
 
 struct reroute {
-	struct connection original_conn;
-	__u32 original_index;
-    __s32 seq_offset;
-	__s32 ack_offset;
-     __u32 rematch_flag;
-    struct connection new_conn;
-	__u32 new_index;
+	struct connection original_conn; // 16 bytes
+	struct eth_conn original_eth; // 12
+	__u32 original_index; // 4
+    __s32 seq_offset; // 4
+	__s32 ack_offset; // 4
+ 	__u32 rematch_flag; // 4
+    struct connection new_conn; // 16 
+	struct eth_conn new_eth; // 12
+	__u32 new_index; // 4
 };
 
 struct numbers {
@@ -56,6 +67,7 @@ struct numbers {
 	__u32 ack_no;
 	__u32 init_seq;
 	__u32 init_ack;
+	struct eth_conn cur_eth;
 };
 
 struct server {
@@ -71,7 +83,7 @@ struct availability {
 // /* Define maps */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 3*MAX_CLIENTS);
+	__uint(max_entries, 2*MAX_CLIENTS);
 	__type(key, struct connection);
 	__type(value, struct reroute);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
@@ -79,7 +91,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 2*MAX_SERVERS*MAX_CLIENTS);
+	__uint(max_entries, (MAX_SERVERS*MAX_CLIENTS));
 	__type(key, struct connection);
 	__type(value, struct numbers);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
@@ -274,13 +286,15 @@ static inline int from_client(struct connection *conn)
 	return 0;
 }
 
-static inline int generate_and_insert_numbers(struct connection conn, __u32 *seq_no, __u32 *ack_no) {
+static inline int generate_and_insert_numbers(struct connection conn, __u32 *seq_no, __u32 *ack_no, struct eth_conn *cur_eth) {
 	struct numbers nums;
 	nums.seq_no = *ack_no;
 	nums.ack_no = *seq_no + 1;
 
 	nums.init_seq = nums.seq_no;
 	nums.init_ack = nums.ack_no;
+
+	nums.cur_eth = *cur_eth;
 
 	bpf_printk("Number struct generated\n");
 	bpf_printk("Nums.seq: %u\n", nums.seq_no);
@@ -322,6 +336,13 @@ static inline struct server create_server_struct(struct connection *conn)
 	server.port = conn->dst_port;
 	server.ip = conn->dst_ip;
 	return server;
+}
+
+static inline void reverse_eth(struct eth_conn *cur_eth) {
+	__u8 temp[ETH_ALEN];
+	__builtin_memcpy(temp, cur_eth->src.addr, ETH_ALEN);
+	__builtin_memcpy(cur_eth->src.addr, cur_eth->dst.addr, sizeof(struct eth_addr));
+	__builtin_memcpy(cur_eth->dst.addr, temp, sizeof(struct eth_addr));
 }
 
 SEC("xdp_tcp")
@@ -367,6 +388,10 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 	struct connection conn = create_conn_struct(&tcph, &iph);
 
+	struct eth_conn cur_eth;
+	__builtin_memcpy(cur_eth.src.addr, ethh->h_source, sizeof(struct eth_addr));
+	__builtin_memcpy(cur_eth.src.addr, ethh->h_dest, sizeof(struct eth_addr));
+
 	// Query map for possible routing
 	struct reroute *reroute_ptr = bpf_map_lookup_elem(&conn_map, &conn);
 	if (!reroute_ptr) {
@@ -375,8 +400,9 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		// Introduce the seq and ack into NUMBERS_STRUCT for respective CONN
 		if (tcph->syn && tcph->ack) {
 			struct connection rev_conn = create_reverse_conn(&conn);
+			reverse_eth(&cur_eth);
 			//bpf_printk("REROUTE - rev_conn.src: %u, rev_conn.dst: %u\n", rev_conn.src_port, rev_conn.dst_port);
-			if (generate_and_insert_numbers(rev_conn, &seq_no, &ack_seq) == 0) {
+			if (generate_and_insert_numbers(rev_conn, &seq_no, &ack_seq, &cur_eth) == 0) {
 				bpf_printk("ABORT - Unable to insert numbers for conn\n");
 				action = XDP_ABORTED;
 				goto OUT;
@@ -635,6 +661,9 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		bpf_printk("IP in H is: %u", bpf_ntohl(reroute_ptr->original_conn.src_ip));
 		iph->saddr = bpf_htonl(reroute_ptr->original_conn.src_ip);
 		iph->daddr = bpf_htonl(reroute_ptr->original_conn.dst_ip);
+
+		__builtin_memcpy(ethh->h_source, reroute_ptr->original_eth.src.addr, sizeof(struct eth_addr));
+		__builtin_memcpy(ethh->h_dest, reroute_ptr->original_eth.dst.addr, sizeof(struct eth_addr));
 			
 		// bpf_printk("AFTER MODIFICATION - tcp.src: %u, tcp.dst %u\n", bpf_ntohs(tcph->source), bpf_ntohs(tcph->dest));
 		perform_checksums(tcph, iph, data_end);

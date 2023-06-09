@@ -18,10 +18,10 @@ import (
 const (
 	first_server_no     = 4171
 	root_path           = "/sys/fs/bpf/"
-	connection_map_path = "conn_map"
-	numbers_map_path    = "numbers_map"
-	available_map_path  = "available_map"
-	rematch_map_path    = "rematch_map"
+	connection_map_path = "/conn_map"
+	numbers_map_path    = "/numbers_map"
+	available_map_path  = "/available_map"
+	rematch_map_path    = "/rematch_map"
 )
 
 var (
@@ -51,10 +51,10 @@ func main() {
 		return
 	}
 
-	//iface := os.Args[2]
+	iface := os.Args[2]
 
 	//map handling
-	path := root_path + connection_map_path
+	path := root_path + iface + connection_map_path
 	fmt.Println("PATH: ", path)
 	conn_map, err := ebpf.LoadPinnedMap(path, nil)
 	if err != nil {
@@ -62,13 +62,13 @@ func main() {
 		return
 	}
 
-	numbers_map, err := ebpf.LoadPinnedMap(root_path+numbers_map_path, nil)
+	numbers_map, err := ebpf.LoadPinnedMap(root_path+iface+numbers_map_path, nil)
 	if err != nil {
 		fmt.Printf("Could not open %s\n", numbers_map_path)
 		return
 	}
 
-	available_map, err := ebpf.LoadPinnedMap(root_path+available_map_path, nil)
+	available_map, err := ebpf.LoadPinnedMap(root_path+iface+available_map_path, nil)
 	if err != nil {
 		fmt.Printf("Could not open %s\n", available_map_path)
 		return
@@ -338,11 +338,13 @@ func getReroutes(client_conn Connection, server_conn Connection, numbers_map *eb
 	c_seq_off, c_ack_off := calculateOffsets(client_n, server_n)
 	client_reroute := Reroute{
 		Original_conn:  server_conn,
+		Original_eth:   server_n.Cur_Eth,
 		Original_index: uint32(index),
 		Seq_offset:     c_seq_off,
 		Ack_offset:     c_ack_off,
 		Rematch_flag:   uint32(0),
 		New_conn:       server_conn,
+		New_eth:        server_n.Cur_Eth,
 		New_index:      uint32(index),
 	}
 
@@ -350,15 +352,25 @@ func getReroutes(client_conn Connection, server_conn Connection, numbers_map *eb
 	rev_client_conn := reverseConn(client_conn)
 	server_reroute := Reroute{
 		Original_conn:  rev_client_conn,
+		Original_eth:   reverseEth(client_n.Cur_Eth),
 		Original_index: uint32(index),
 		Seq_offset:     s_seq_off,
 		Ack_offset:     s_ack_off,
 		Rematch_flag:   uint32(0),
 		New_conn:       rev_client_conn,
+		New_eth:        reverseEth(client_n.Cur_Eth),
 		New_index:      uint32(index),
 	}
 
 	return client_reroute, server_reroute, nil
+}
+
+func reverseEth(eth Eth_conn) Eth_conn {
+	rev_Eth := Eth_conn{
+		Src_addr: eth.Dst_addr,
+		Dst_addr: eth.Src_addr,
+	}
+	return rev_Eth
 }
 
 func calculateOffsets(conn_n Numbers, other_n Numbers) (int32, int32) {

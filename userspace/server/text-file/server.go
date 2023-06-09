@@ -10,8 +10,8 @@ import (
 
 func main() {
 	// Check if port number was provided
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run main.go <port>")
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: go run main.go <ipv4> <port>")
 		os.Exit(1)
 	}
 
@@ -20,7 +20,7 @@ func main() {
 	signal.Notify(sigCh, os.Interrupt)
 
 	// Set the port
-	port := ":" + os.Args[1]
+	port := os.Args[1] + ":" + os.Args[2]
 
 	// Listen for incoming connections.
 	listener, err := net.Listen("tcp", port)

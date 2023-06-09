@@ -14,13 +14,13 @@ func handler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	//input parsing
 	if len(os.Args) != 2 {
-		fmt.Println("Usage: test <integer> <integer>")
+		fmt.Println("Usage: http-listener IPv4 Port")
 		os.Exit(1)
 	}
 
 	http.HandleFunc("/", handler)
 
-	address := "localhost:" + os.Args[1]
+	address := os.Args[1] + ":" + os.Args[2]
 	log.Printf("Server running at http://%s/\n", address)
 	log.Fatal(http.ListenAndServe(address, nil))
 }

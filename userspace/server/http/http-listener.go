@@ -13,7 +13,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	//input parsing
-	if len(os.Args) != 2 {
+	if len(os.Args) != 3 {
 		fmt.Println("Usage: http-listener IPv4 Port")
 		os.Exit(1)
 	}

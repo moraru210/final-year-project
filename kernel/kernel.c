@@ -79,7 +79,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, MAX_SERVERS*MAX_CLIENTS);
+	__uint(max_entries, 2*MAX_SERVERS*MAX_CLIENTS);
 	__type(key, struct connection);
 	__type(value, struct numbers);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
@@ -262,30 +262,13 @@ static inline struct connection create_conn_struct(struct tcphdr **tcph, struct 
 	bpf_printk("CONN - src port: %u, dst port: %u", conn.src_port, conn.dst_port);
 	conn.src_ip = bpf_ntohl((*iph)->saddr);
 	conn.dst_ip = bpf_ntohl((*iph)->daddr);
-	bpf_printk("ip header saddr: %u, daddr: %u", conn.src_ip, conn.dst_ip);
+	bpf_printk("CONN - ip saddr: %u, ip daddr: %u", conn.src_ip, conn.dst_ip);
 	return conn;
-}
-
-static inline int from_server(struct connection *conn)
-{
-	if (conn->src_port >= MIN_SERVER_PORT 
-		&& conn->src_port <= MAX_SERVER_PORT) {
-			return 1;
-		}
-	return 0;
 }
 
 static inline int from_client(struct connection *conn)
 {
 	if (conn->dst_port == LB_LISTENER_PORT) {
-			return 1;
-	}
-	return 0;
-}
-
-static inline int to_client(struct connection *conn)
-{
-	if (conn->src_port == LB_LISTENER_PORT) {
 			return 1;
 	}
 	return 0;
@@ -303,6 +286,7 @@ static inline int generate_and_insert_numbers(struct connection conn, __u32 *seq
 	bpf_printk("Nums.seq: %u\n", nums.seq_no);
 	bpf_printk("Nums.ack: %u\n", nums.ack_no);
 
+	bpf_printk("NUMS - conn.srcPort %u, conn.dstPort %u, conn.srcIP %u, conn.dstIP %u", conn.src_port, conn.dst_port, conn.src_ip, conn.dst_ip);
 	if (bpf_map_update_elem(&numbers_map, &conn, &nums, 0) < 0) {
 		bpf_printk("Unable to introduce (conn.src: %u, conn.dst: %u) to numbers_map\n", conn.src_port, conn.dst_port);
 		return 0;
@@ -389,7 +373,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		
 		//bpf_printk("REROUTE - could not query conn_map for routing\n");
 		// Introduce the seq and ack into NUMBERS_STRUCT for respective CONN
-		if (tcph->syn && tcph->ack && (to_client(&conn) || from_server(&conn))) {
+		if (tcph->syn && tcph->ack) {
 			struct connection rev_conn = create_reverse_conn(&conn);
 			//bpf_printk("REROUTE - rev_conn.src: %u, rev_conn.dst: %u\n", rev_conn.src_port, rev_conn.dst_port);
 			if (generate_and_insert_numbers(rev_conn, &seq_no, &ack_seq) == 0) {
@@ -473,7 +457,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 		//bpf_printk("REROUTE - reroute found\n");
 		// Update NUMBERS When receiving PSH - (need to include payload in ack/seq)
-		if (tcph->psh && from_server(&conn)) {
+		if (tcph->psh && from_client(&conn) == 0) {
 			struct connection rev_conn = create_reverse_conn(&conn);
 			struct numbers *nums_ptr = bpf_map_lookup_elem(&numbers_map, &rev_conn);
 			if (!nums_ptr) {
@@ -633,7 +617,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				action = XDP_ABORTED;
 				goto OUT;
 			}
-		} else if (payload_len > 0 && from_server(&conn)) {
+		} else if (payload_len > 0) {
 			__u32 one = 1;
 			struct server client;
 			client.ip = reroute_ptr->original_conn.dst_ip;

@@ -12,15 +12,23 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run client.go <port>")
+		fmt.Println("Usage: go run client.go <ipv4> <port>")
 		os.Exit(1)
 	}
 
 	// Set the address
-	address := "localhost:" + os.Args[1]
+	address := os.Args[1] + ":" + os.Args[2]
 	fmt.Println("Address is: ", address)
 	// Connect to the netcat listener
-	conn, err := net.Dial("tcp", address)
+
+	localAddr := &net.TCPAddr{
+		IP:   net.ParseIP("127.0.0.1"),
+		Port: 0,
+	}
+	dialer := &net.Dialer{
+		LocalAddr: localAddr,
+	}
+	conn, err := dialer.Dial("tcp", address)
 	if err != nil {
 		panic(err)
 	}

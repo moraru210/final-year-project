@@ -10,7 +10,7 @@ start:
 	go run generate.go $(MAX_CLIENTS) $(MAX_SERVERS) && \
 	cd ../lb && \
 	go build && \
-	./lb 2
+	./lb $(IPv4) $(TARGET)
 
 clean:
 	cd kernel && \

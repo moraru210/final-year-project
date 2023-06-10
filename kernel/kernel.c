@@ -670,7 +670,26 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				bpf_printk("STATE - unable to change state to 1 for original_conn.dst: %u\n", reroute_ptr->original_conn.dst_port);
 			}
 		}
-		
+
+
+		bpf_printk("TCP SRC in H is: %u", bpf_ntohs(tcph->source));
+		bpf_printk("TCP DST in H is: %u", bpf_ntohs(tcph->dest));
+		bpf_printk("IP SRC in H is: %u", bpf_ntohl(iph->saddr));
+		bpf_printk("IP DST in H is: %u", bpf_ntohl(iph->daddr));
+
+		bpf_printk("Src MAC[0]: %u", ethh->h_source[0]);
+		bpf_printk("Src MAC[1]: %u", ethh->h_source[1]);
+		bpf_printk("Src MAC[2]: %u", ethh->h_source[2]);
+		bpf_printk("Src MAC[3]: %u", ethh->h_source[3]);
+		bpf_printk("Src MAC[4]: %u", ethh->h_source[4]);
+		bpf_printk("Src MAC[5]: %u", ethh->h_source[5]);
+
+		bpf_printk("Dst MAC[0]: %u", ethh->h_dest[0]);
+		bpf_printk("Dst MAC[1]: %u", ethh->h_dest[1]);
+		bpf_printk("Dst MAC[2]: %u", ethh->h_dest[2]);
+		bpf_printk("Dst MAC[3]: %u", ethh->h_dest[3]);
+		bpf_printk("Dst MAC[4]: %u", ethh->h_dest[4]);
+		bpf_printk("Dst MAC[5]: %u", ethh->h_dest[5]);
 
 		modify_seq_ack(&tcph, reroute_ptr->seq_offset, reroute_ptr->ack_offset);
 		tcph->source = bpf_htons(reroute_ptr->original_conn.src_port);
@@ -679,7 +698,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		iph->saddr = bpf_htonl(reroute_ptr->original_conn.src_ip);
 		iph->daddr = bpf_htonl(reroute_ptr->original_conn.dst_ip);
 
-
+		bpf_printk("AFTER MODIFYING")
 		bpf_printk("TCP SRC in H is: %u", reroute_ptr->original_conn.src_port);
 		bpf_printk("TCP DST in H is: %u", reroute_ptr->original_conn.dst_port);
 		bpf_printk("IP SRC in H is: %u", reroute_ptr->original_conn.src_ip);

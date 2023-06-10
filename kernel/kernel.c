@@ -226,44 +226,28 @@ static __always_inline __u16 csum_reduce_helper(__u32 csum)
 	return csum;
 }
 
-static inline unsigned short generic_checksum(unsigned short *buf, void *data_end, unsigned long sum, int max) 
-{
-	int flag = 0;
-    for (int i = 0; i < max; i += 2) {
-		if ((void *)(buf + 1) > data_end)
-			flag = 1;
-	    	break;
-        sum += *buf;
-        buf++;
-    }
-	if (!flag) {
-		if((void *)buf +1 <= data_end) {
-			sum +=  bpf_htons((*((unsigned char *)buf)) << 8);
-    	}
-	}
-    sum = (sum & 0xffff) + (sum >> 16);
-    sum = (sum & 0xffff) + (sum >> 16);
-    return ~sum;
-}
-
-static inline __u16 l4_checksum(struct iphdr *iph, void *l4, void *data_end)
-{
-    __u32 csum = 0;
-    csum += *(((__u16 *) &(iph->saddr))+0); // 1st 2 bytes
-    csum += *(((__u16 *) &(iph->saddr))+1); // 2nd 2 bytes
-    csum += *(((__u16 *) &(iph->daddr))+0); // 1st 2 bytes
-    csum += *(((__u16 *) &(iph->daddr))+1); // 2nd 2 bytes
-    csum += bpf_htons((__u16)iph->protocol); // protocol is a u8
-    csum += bpf_htons((__u16)(data_end - (void *)l4)); 
-    return generic_checksum((unsigned short *) l4, data_end, csum, 1480);
-}
-
-static inline void perform_checksums(struct tcphdr *tcph, struct iphdr *iph, void *data_end)
+static inline void perform_checksums(struct tcphdr *tcph, struct iphdr *iph, void *data, void *data_end)
 {
 	iph->check = 0;
 	iph->check = ~csum_reduce_helper(bpf_csum_diff(0, 0, (__be32 *)iph, sizeof(struct iphdr), 0));
+	
+	void *ptr = (void *)(tcph+1);
+	if (ptr > data_end) {
+		bpf_printk("UNABLE TO PERFORM TCP CHECKSUM");
+		return;
+	}
 	tcph->check = 0;
-	tcph->check = l4_checksum(iph, tcph, data_end);
+	unsigned int tcp_len = data_end - (void *)tcph;
+
+	 // Convert xdp_md to __sk_buff
+    struct __sk_buff skb_dummy = {
+        .data = data,
+        .data_end = data_end,
+    };
+    struct __sk_buff *skb_new = &skb_dummy;
+
+	// Recalculate and replace the TCP checksum
+    bpf_l4_csum_replace(skb_new, tcph->check, (__u32)0, (__u32)tcp_len, 0);
 }
 
 static inline struct connection create_conn_struct(struct tcphdr **tcph, struct iphdr **iph)
@@ -684,11 +668,29 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		bpf_printk("IP SRC in H is: %u", reroute_ptr->original_conn.src_ip);
 		bpf_printk("IP DST in H is: %u", reroute_ptr->original_conn.dst_ip);
 
-		__builtin_memcpy(ethh->h_source, reroute_ptr->original_eth.src.addr, sizeof(struct eth_addr));
-		__builtin_memcpy(ethh->h_dest, reroute_ptr->original_eth.dst.addr, sizeof(struct eth_addr));
+		// __builtin_memcpy(ethh->h_source, reroute_ptr->original_eth.src.addr, sizeof(struct eth_addr));
+		// __builtin_memcpy(ethh->h_dest, reroute_ptr->original_eth.dst.addr, sizeof(struct eth_addr));
+		__u8 tmp[ETH_ALEN];
+		__builtin_memcpy(tmp, ethh->h_source, ETH_ALEN);
+		__builtin_memcpy(ethh->h_source, ethh->h_dest, ETH_ALEN);
+		__builtin_memcpy(ethh->h_dest, tmp, ETH_ALEN);
+
+		bpf_printk("Src MAC[0]: %u", ethh->h_source[0]);
+		bpf_printk("Src MAC[1]: %u", ethh->h_source[0]);
+		bpf_printk("Src MAC[2]: %u", ethh->h_source[0]);
+		bpf_printk("Src MAC[3]: %u", ethh->h_source[0]);
+		bpf_printk("Src MAC[4]: %u", ethh->h_source[0]);
+		bpf_printk("Src MAC[5]: %u", ethh->h_source[0]);
+
+		bpf_printk("Dst MAC[0]: %u", ethh->h_dest[0]);
+		bpf_printk("Dst MAC[1]: %u", ethh->h_dest[1]);
+		bpf_printk("Dst MAC[2]: %u", ethh->h_dest[2]);
+		bpf_printk("Dst MAC[3]: %u", ethh->h_dest[3]);
+		bpf_printk("Dst MAC[4]: %u", ethh->h_dest[4]);
+		bpf_printk("Dst MAC[5]: %u", ethh->h_dest[5]);
 			
 		// bpf_printk("AFTER MODIFICATION - tcp.src: %u, tcp.dst %u\n", bpf_ntohs(tcph->source), bpf_ntohs(tcph->dest));
-		perform_checksums(tcph, iph, data_end);
+		perform_checksums(tcph, iph, data, data_end);
 		action = XDP_TX;
 	}
 OUT:

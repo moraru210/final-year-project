@@ -313,7 +313,10 @@ func startLB(available_map *ebpf.Map, conn_map *ebpf.Map, numbers_map *ebpf.Map,
 		}
 
 		servStruct := *server_conn
-		connStruct := reverseConn(convertToConnStruct(conn))
+		connStruct := convertToConnStruct(conn)
+		if connStruct.Dst_port != uint32(8080) {
+			connStruct = reverseConn(connStruct)
+		}
 		fmt.Printf("LB - Client conn.srcPort %d conn.dstPort %d, conn.SrcIP %d, conn.DstIP %d\n", connStruct.Src_port, connStruct.Dst_port, connStruct.Src_ip, connStruct.Dst_ip)
 		fmt.Printf("LB - Server conn.src %d conn.dst %d\n", servStruct.Src_port, servStruct.Dst_port)
 
@@ -589,8 +592,8 @@ func convertToConnStruct(conn net.Conn) Connection {
 	c := Connection{
 		Src_port: c_loc_port,
 		Dst_port: c_rem_port,
-		Src_ip:   uint32(binary.BigEndian.Uint32(net.ParseIP(c_rem_ip).To4())),
-		Dst_ip:   uint32(binary.BigEndian.Uint32(net.ParseIP(c_loc_ip).To4())),
+		Src_ip:   uint32(binary.BigEndian.Uint32(net.ParseIP(c_loc_ip).To4())),
+		Dst_ip:   uint32(binary.BigEndian.Uint32(net.ParseIP(c_rem_ip).To4())),
 	}
 
 	fmt.Printf("conn srcPort: %d, dstPort %d, srcIP: %d, dstIP: %d\n", c.Src_port, c.Dst_port, c.Src_ip, c.Dst_ip)

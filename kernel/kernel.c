@@ -411,8 +411,8 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		} else if (tcph->syn && tcph->ack) {
 			struct connection rev_conn = create_reverse_conn(&conn);
 			struct eth_conn rev_cur;
-			__builtin_memcpy(rev_cur.src.addr, ethh->h_source, sizeof(struct eth_addr));
-			__builtin_memcpy(rev_cur.dst.addr, ethh->h_dest, sizeof(struct eth_addr));
+			__builtin_memcpy(rev_cur.src.addr, ethh->h_dest, sizeof(struct eth_addr));
+			__builtin_memcpy(rev_cur.dst.addr, ethh->h_source, sizeof(struct eth_addr));
 			
 			//bpf_printk("REROUTE - rev_conn.src: %u, rev_conn.dst: %u\n", rev_conn.src_port, rev_conn.dst_port);
 			if (generate_and_insert_numbers(rev_conn, &seq_no, &ack_seq, &rev_cur) == 0) {

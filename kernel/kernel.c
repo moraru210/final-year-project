@@ -707,7 +707,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		bpf_printk("Dst MAC[5]: %u", ethh->h_dest[5]);
 			
 		// bpf_printk("AFTER MODIFICATION - tcp.src: %u, tcp.dst %u\n", bpf_ntohs(tcph->source), bpf_ntohs(tcph->dest));
-		perform_checksums(tcph, iph, data, data_end);
+		perform_checksums(tcph, iph, data_end);
 		action = XDP_TX;
 	}
 OUT:

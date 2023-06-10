@@ -592,8 +592,8 @@ func convertToConnStruct(conn net.Conn) Connection {
 	c := Connection{
 		Src_port: c_loc_port,
 		Dst_port: c_rem_port,
-		Src_ip:   uint32(binary.BigEndian.Uint32(net.ParseIP(c_rem_ip).To4())),
-		Dst_ip:   uint32(binary.BigEndian.Uint32(net.ParseIP(c_loc_ip).To4())),
+		Src_ip:   uint32(binary.BigEndian.Uint32(net.ParseIP(c_loc_ip).To4())),
+		Dst_ip:   uint32(binary.BigEndian.Uint32(net.ParseIP(c_rem_ip).To4())),
 	}
 
 	fmt.Printf("conn srcPort: %d, dstPort %d, srcIP: %d, dstIP: %d\n", c.Src_port, c.Dst_port, c.Src_ip, c.Dst_ip)

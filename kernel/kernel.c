@@ -392,13 +392,16 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		//bpf_printk("REROUTE - could not query conn_map for routing\n");
 		// Introduce the seq and ack into NUMBERS_STRUCT for respective CONN
 		if (tcph->ack && from_client(&conn)) {
+			bpf_printk("CONN - src port: %u, dst port: %u", conn.src_port, conn.dst_port);
+			bpf_printk("CONN - ip saddr: %u, ip daddr: %u", conn.src_ip, conn.dst_ip);
+
 			struct numbers nums;
 			nums.seq_no = seq_no;
 			nums.ack_no = ack_seq;
 			nums.init_seq = nums.seq_no;
 			nums.init_ack = nums.ack_no;
-			__builtin_memcpy(nums.cur_eth.src.addr, ethh->h_dest, sizeof(struct eth_addr));
-			__builtin_memcpy(nums.cur_eth.dst.addr, ethh->h_source, sizeof(struct eth_addr));
+			__builtin_memcpy(nums.cur_eth.src.addr, ethh->h_source, sizeof(struct eth_addr));
+			__builtin_memcpy(nums.cur_eth.dst.addr, ethh->h_dest, sizeof(struct eth_addr));
 
 			if (bpf_map_update_elem(&numbers_map, &conn, &nums, 0) < 0) {
 				bpf_printk("Unable to introduce (conn.src: %u, conn.dst: %u) to numbers_map\n", conn.src_port, conn.dst_port);
@@ -684,7 +687,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		action = XDP_TX;
 	}
 OUT:
-	bpf_printk("*** end of a packet ***");
+	//bpf_printk("*** end of a packet ***");
 	return action;
 }
 

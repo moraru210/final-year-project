@@ -674,10 +674,15 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		modify_seq_ack(&tcph, reroute_ptr->seq_offset, reroute_ptr->ack_offset);
 		tcph->source = bpf_htons(reroute_ptr->original_conn.src_port);
 		tcph->dest = bpf_htons(reroute_ptr->original_conn.dst_port);
-		bpf_printk("Ip in N is: %u", reroute_ptr->original_conn.src_ip);
-		bpf_printk("IP in H is: %u", bpf_ntohl(reroute_ptr->original_conn.src_ip));
+		
 		iph->saddr = bpf_htonl(reroute_ptr->original_conn.src_ip);
 		iph->daddr = bpf_htonl(reroute_ptr->original_conn.dst_ip);
+
+
+		bpf_printk("TCP SRC in H is: %u", reroute_ptr->original_conn.src_port);
+		bpf_printk("TCP DST in H is: %u", reroute_ptr->original_conn.dst_port);
+		bpf_printk("IP SRC in H is: %u", reroute_ptr->original_conn.src_ip);
+		bpf_printk("IP DST in H is: %u", reroute_ptr->original_conn.dst_ip);
 
 		__builtin_memcpy(ethh->h_source, reroute_ptr->original_eth.src.addr, sizeof(struct eth_addr));
 		__builtin_memcpy(ethh->h_dest, reroute_ptr->original_eth.dst.addr, sizeof(struct eth_addr));

@@ -313,7 +313,10 @@ func startLB(available_map *ebpf.Map, conn_map *ebpf.Map, numbers_map *ebpf.Map,
 		}
 
 		servStruct := *server_conn
-		connStruct := reverseConn(convertToConnStruct(conn))
+		connStruct := convertToConnStruct(conn)
+		if connStruct.Dst_port != uint32(8080) {
+			connStruct = reverseConn(connStruct)
+		}
 		fmt.Printf("LB - Client conn.srcPort %d conn.dstPort %d, conn.SrcIP %d, conn.DstIP %d\n", connStruct.Src_port, connStruct.Dst_port, connStruct.Src_ip, connStruct.Dst_ip)
 		fmt.Printf("LB - Server conn.src %d conn.dst %d\n", servStruct.Src_port, servStruct.Dst_port)
 

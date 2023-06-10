@@ -271,10 +271,10 @@ static inline struct connection create_conn_struct(struct tcphdr **tcph, struct 
 	struct connection conn;
 	conn.src_port = bpf_ntohs((*tcph)->source);
 	conn.dst_port = bpf_ntohs((*tcph)->dest);
-	bpf_printk("CONN - src port: %u, dst port: %u", conn.src_port, conn.dst_port);
+	//bpf_printk("CONN - src port: %u, dst port: %u", conn.src_port, conn.dst_port);
 	conn.src_ip = bpf_ntohl((*iph)->saddr);
 	conn.dst_ip = bpf_ntohl((*iph)->daddr);
-	bpf_printk("CONN - ip saddr: %u, ip daddr: %u", conn.src_ip, conn.dst_ip);
+	//bpf_printk("CONN - ip saddr: %u, ip daddr: %u", conn.src_ip, conn.dst_ip);
 	return conn;
 }
 
@@ -352,7 +352,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 	nh.pos = data;
 
-	bpf_printk("*** start of a new packet ***");
+	// bpf_printk("*** start of a new packet ***");
 	// Begin initial checks
 	eth_type = parse_ethhdr(&nh, data_end, &ethh);
 	if (eth_type < 0) {
@@ -391,11 +391,26 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		
 		//bpf_printk("REROUTE - could not query conn_map for routing\n");
 		// Introduce the seq and ack into NUMBERS_STRUCT for respective CONN
-		if (tcph->syn && tcph->ack) {
+		if (tcph->ack && from_client(&conn)) {
+			struct numbers nums;
+			nums.seq_no = seq_no;
+			nums.ack_no = ack_seq;
+			nums.init_seq = nums.seq_no;
+			nums.init_ack = nums.ack_no;
+			__builtin_memcpy(nums.cur_eth.src.addr, ethh->h_dest, sizeof(struct eth_addr));
+			__builtin_memcpy(nums.cur_eth.dst.addr, ethh->h_source, sizeof(struct eth_addr));
+
+			if (bpf_map_update_elem(&numbers_map, &conn, &nums, 0) < 0) {
+				bpf_printk("Unable to introduce (conn.src: %u, conn.dst: %u) to numbers_map\n", conn.src_port, conn.dst_port);
+				return 0;
+			}
+
+		} else if (tcph->syn && tcph->ack) {
 			struct connection rev_conn = create_reverse_conn(&conn);
 			struct eth_conn rev_cur;
 			__builtin_memcpy(rev_cur.src.addr, ethh->h_dest, sizeof(struct eth_addr));
 			__builtin_memcpy(rev_cur.dst.addr, ethh->h_source, sizeof(struct eth_addr));
+			
 			//bpf_printk("REROUTE - rev_conn.src: %u, rev_conn.dst: %u\n", rev_conn.src_port, rev_conn.dst_port);
 			if (generate_and_insert_numbers(rev_conn, &seq_no, &ack_seq, &rev_cur) == 0) {
 				bpf_printk("ABORT - Unable to insert numbers for conn\n");

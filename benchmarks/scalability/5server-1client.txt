@@ -1,0 +1,13 @@
+Running 3m test @ http://127.0.0.1:8080
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    54.72us  249.09us  25.66ms   97.23%
+    Req/Sec    29.09k     1.90k   31.57k    90.56%
+  Latency Distribution
+     50%   30.00us
+     75%   31.00us
+     90%   37.00us
+     99%  510.00us
+  5214271 requests in 3.00m, 646.45MB read
+Requests/sec:  28951.03
+Transfer/sec:      3.59MB

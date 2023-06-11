@@ -91,7 +91,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, (MAX_SERVERS*MAX_CLIENTS));
+	__uint(max_entries, MAX_CLIENTS + (MAX_SERVERS*MAX_CLIENTS));
 	__type(key, struct connection);
 	__type(value, struct numbers);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
@@ -379,12 +379,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	__u32 ack_seq = bpf_ntohl(tcph->ack_seq);
     
 	int payload_len = bpf_ntohs(iph->tot_len) - (sizeof(struct iphdr) + tcph_len);
-
 	struct connection conn = create_conn_struct(&tcph, &iph);
-
-	// struct eth_conn cur_eth;
-	// __builtin_memcpy(cur_eth.src.addr, ethh->h_source, sizeof(struct eth_addr));
-	// __builtin_memcpy(cur_eth.src.addr, ethh->h_dest, sizeof(struct eth_addr));
 
 	// Query map for possible routing
 	struct reroute *reroute_ptr = bpf_map_lookup_elem(&conn_map, &conn);
@@ -529,7 +524,6 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 
 		//Check if rematch is needed
 		if (reroute_ptr->rematch_flag == 1) {
-			//bpf_printk("REMATCH - rematch flag set\n");
 			struct server client;
 			client.ip = conn.src_ip;
 			client.port = conn.src_port;
@@ -610,12 +604,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				__s32 s_seq_offset = server_nums_ptr->ack_no - nums_ptr->ack_no;
 				__s32 s_ack_offset = server_nums_ptr->seq_no - nums_ptr->seq_no;
 
-				// // bpf_printk("Server conn.seq: %u, conn.ack: %u\n", server_nums_ptr->seq_no, server_nums_ptr->ack_no);
-				// // bpf_printk("Client conn.seq: %u, conn.ack: %u\n", nums_ptr->seq_no, nums_ptr->ack_no);
-				// // bpf_printk("c_seq_offset: %d, c_ack_offset: %d", c_seq_offset, c_ack_offset);
-				// // bpf_printk("Client.seq after: %u, Client.ack after: %u", nums_ptr->seq_no - c_seq_offset, nums_ptr->ack_no - c_ack_offset);
-
-				// // First correct client->LB reroute
+				// // // First correct client->LB reroute
 				reroute_ptr->original_conn = reroute_ptr->new_conn;
 				reroute_ptr->original_index = reroute_ptr->new_index;
 				reroute_ptr->original_eth = reroute_ptr->new_eth;
@@ -640,10 +629,11 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				__builtin_memcpy(rev_reroute.new_eth.src.addr, ethh->h_dest, ETH_ALEN);
 				__builtin_memcpy(rev_reroute.new_eth.dst.addr, ethh->h_source, ETH_ALEN);
 				rev_reroute.new_conn = rev_reroute.original_conn;
+				rev_reroute.rematch_flag = 0;
 				struct connection rev_new_server = create_reverse_conn(&reroute_ptr->new_conn);
 
 				if (bpf_map_update_elem(&conn_map, &rev_new_server, &rev_reroute, 0) < 0) {
-					bpf_printk("REMATCH - Unable to upate reroute object for (conn.src %u, conn.dst %u)\n", rev_new_server.src_port, rev_new_server.dst_port);
+					//bpf_printk("REMATCH - Unable to upate reroute object for (conn.src %u, conn.dst %u)\n", rev_new_server.src_port, rev_new_server.dst_port);
 					action = XDP_ABORTED;
 					goto OUT;
 				}			
@@ -657,7 +647,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			client.ip = conn.src_ip;
 			client.port = conn.src_port;
 			if (bpf_map_update_elem(&state_map, &client, &zero, 0) < 0) {
-				bpf_printk("STATE - unable to change state to 0 for conn.src: %u\n", conn.src_port);
+				//bpf_printk("STATE - unable to change state to 0 for conn.src: %u\n", conn.src_port);
 				action = XDP_ABORTED;
 				goto OUT;
 			}
@@ -667,29 +657,11 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			client.ip = reroute_ptr->original_conn.dst_ip;
 			client.port = reroute_ptr->original_conn.dst_port;
 			if (bpf_map_update_elem(&state_map, &client, &one, 0) < 0) {
-				bpf_printk("STATE - unable to change state to 1 for original_conn.dst: %u\n", reroute_ptr->original_conn.dst_port);
+				//bpf_printk("STATE - unable to change state to 1 for original_conn.dst: %u\n", reroute_ptr->original_conn.dst_port);
+				action = XDP_ABORTED;
+				goto OUT;
 			}
 		}
-
-
-		bpf_printk("TCP SRC in H is: %u", bpf_ntohs(tcph->source));
-		bpf_printk("TCP DST in H is: %u", bpf_ntohs(tcph->dest));
-		bpf_printk("IP SRC in H is: %u", bpf_ntohl(iph->saddr));
-		bpf_printk("IP DST in H is: %u", bpf_ntohl(iph->daddr));
-
-		bpf_printk("Src MAC[0]: %u", ethh->h_source[0]);
-		bpf_printk("Src MAC[1]: %u", ethh->h_source[1]);
-		bpf_printk("Src MAC[2]: %u", ethh->h_source[2]);
-		bpf_printk("Src MAC[3]: %u", ethh->h_source[3]);
-		bpf_printk("Src MAC[4]: %u", ethh->h_source[4]);
-		bpf_printk("Src MAC[5]: %u", ethh->h_source[5]);
-
-		bpf_printk("Dst MAC[0]: %u", ethh->h_dest[0]);
-		bpf_printk("Dst MAC[1]: %u", ethh->h_dest[1]);
-		bpf_printk("Dst MAC[2]: %u", ethh->h_dest[2]);
-		bpf_printk("Dst MAC[3]: %u", ethh->h_dest[3]);
-		bpf_printk("Dst MAC[4]: %u", ethh->h_dest[4]);
-		bpf_printk("Dst MAC[5]: %u", ethh->h_dest[5]);
 
 		modify_seq_ack(&tcph, reroute_ptr->seq_offset, reroute_ptr->ack_offset);
 		tcph->source = bpf_htons(reroute_ptr->original_conn.src_port);
@@ -698,46 +670,15 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		iph->saddr = bpf_htonl(reroute_ptr->original_conn.src_ip);
 		iph->daddr = bpf_htonl(reroute_ptr->original_conn.dst_ip);
 
-		bpf_printk("AFTER MODIFYING")
-		bpf_printk("TCP SRC in H is: %u", reroute_ptr->original_conn.src_port);
-		bpf_printk("TCP DST in H is: %u", reroute_ptr->original_conn.dst_port);
-		bpf_printk("IP SRC in H is: %u", reroute_ptr->original_conn.src_ip);
-		bpf_printk("IP DST in H is: %u", reroute_ptr->original_conn.dst_ip);
-
-		// __builtin_memcpy(ethh->h_source, reroute_ptr->original_eth.src.addr, sizeof(struct eth_addr));
-		// __builtin_memcpy(ethh->h_dest, reroute_ptr->original_eth.dst.addr, sizeof(struct eth_addr));
-		__u8 tmp[ETH_ALEN];
-		__builtin_memcpy(tmp, ethh->h_source, ETH_ALEN);
-		__builtin_memcpy(ethh->h_source, ethh->h_dest, ETH_ALEN);
-		__builtin_memcpy(ethh->h_dest, tmp, ETH_ALEN);
-
-		bpf_printk("Src MAC[0]: %u", ethh->h_source[0]);
-		bpf_printk("Src MAC[1]: %u", ethh->h_source[1]);
-		bpf_printk("Src MAC[2]: %u", ethh->h_source[2]);
-		bpf_printk("Src MAC[3]: %u", ethh->h_source[3]);
-		bpf_printk("Src MAC[4]: %u", ethh->h_source[4]);
-		bpf_printk("Src MAC[5]: %u", ethh->h_source[5]);
-
-		bpf_printk("Dst MAC[0]: %u", ethh->h_dest[0]);
-		bpf_printk("Dst MAC[1]: %u", ethh->h_dest[1]);
-		bpf_printk("Dst MAC[2]: %u", ethh->h_dest[2]);
-		bpf_printk("Dst MAC[3]: %u", ethh->h_dest[3]);
-		bpf_printk("Dst MAC[4]: %u", ethh->h_dest[4]);
-		bpf_printk("Dst MAC[5]: %u", ethh->h_dest[5]);
+		__builtin_memcpy(ethh->h_source, reroute_ptr->original_eth.src.addr, sizeof(struct eth_addr));
+		__builtin_memcpy(ethh->h_dest, reroute_ptr->original_eth.dst.addr, sizeof(struct eth_addr));
 			
-		// bpf_printk("AFTER MODIFICATION - tcp.src: %u, tcp.dst %u\n", bpf_ntohs(tcph->source), bpf_ntohs(tcph->dest));
 		perform_checksums(tcph, iph, data_end);
 		action = XDP_TX;
 	}
 OUT:
 	//bpf_printk("*** end of a packet ***");
 	return action;
-}
-
-SEC("xdp_pass")
-int xdp_pass_func(struct xdp_md *ctx)
-{
-	return XDP_PASS;
 }
 
 char _license[] SEC("license") = "GPL";

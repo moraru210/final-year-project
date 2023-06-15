@@ -8,7 +8,7 @@ import (
 	ebpf "github.com/cilium/ebpf"
 )
 
-func rematch(conn_map, numbers_map, available_map *ebpf.Map, client_src_port, server_no uint32, client_ip, server_ip net.IP) {
+func Rematch(conn_map, numbers_map, available_map *ebpf.Map, client_src_port, server_no uint32, client_ip, server_ip net.IP) {
 	server := Server{
 		Port: server_no,
 		Ip:   binary.BigEndian.Uint32(server_ip),

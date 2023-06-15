@@ -490,9 +490,9 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			goto OUT;
 		}
 
-		//bpf_printk("REROUTE - reroute found\n");
-		// Update NUMBERS When receiving PSH - (need to include payload in ack/seq)
+		// Update NUMBERS When receiving PSH from server - (need to include payload in ack/seq)
 		if (tcph->psh && from_client(&conn) == 0) {
+			// rev_conn direction: server <--- middlebox
 			struct connection rev_conn = create_reverse_conn(&conn);
 			struct numbers *nums_ptr = bpf_map_lookup_elem(&numbers_map, &rev_conn);
 			if (!nums_ptr) {
@@ -506,7 +506,8 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 					bpf_printk("NUMBERS - Unable to update numbers for (conn.src %u, conn.dst %u)\n", conn.src_port, conn.dst_port);
 				}
 			}
-
+			
+			// rev_client_conn: client ---> middlebox
 			struct connection rev_client_conn = create_reverse_conn(&reroute_ptr->original_conn);
 			struct numbers *client_nums_ptr = bpf_map_lookup_elem(&numbers_map, &rev_client_conn);
 			if (!client_nums_ptr) {
@@ -514,9 +515,9 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				action = XDP_ABORTED;
 				goto OUT;
 			} else {
-				client_nums_ptr->seq_no = nums_ptr->seq_no - reroute_ptr->seq_offset;
-				client_nums_ptr->ack_no = nums_ptr->ack_no - reroute_ptr->ack_offset;
-				if (bpf_map_update_elem(&numbers_map, &reroute_ptr->original_conn, client_nums_ptr, 0) < 0) {
+				client_nums_ptr->seq_no = ack_seq - reroute_ptr->ack_offset;
+				client_nums_ptr->ack_no = seq_no - reroute_ptr->seq_offset + payload_len;
+				if (bpf_map_update_elem(&numbers_map, &rev_client_conn, client_nums_ptr, 0) < 0) {
 					bpf_printk("NUMBERS - Unable to update numbers for (conn.src %u, conn.dst %u)\n", rev_client_conn.src_port, rev_client_conn.dst_port);
 				}
 			}
@@ -534,10 +535,13 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				goto OUT;
 			}
 			__u32 state = *state_ptr;
-			bpf_printk("REMATCH - state: %u\n", state);
+			//bpf_printk("REMATCH - state: %u\n", state);
 
 			if (state) {
 				// Safe to initiate rematching process
+				// State == 2 symbolises that it was previously in resp recv state
+				// Hence, now it is safely transitioned to req recv state for first time in transaction
+
 				struct server server = create_server_struct(&reroute_ptr->original_conn);
 				struct availability *availability_ptr = bpf_map_lookup_elem(&available_map, &server);
 				if (!availability_ptr) {
@@ -582,18 +586,10 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 					goto OUT;
 				}
 
+				// rev_server direction: server ---> middlebox
 				struct connection rev_server = create_reverse_conn(&reroute_ptr->original_conn);
 				if (bpf_map_delete_elem(&conn_map, &rev_server) < 0) {
 					bpf_printk("REMATCH - Unable to delete reroute object for (conn.src %u, conn.dst %u)\n", rev_server.src_port, rev_server.dst_port);
-					action = XDP_ABORTED;
-					goto OUT;
-				}
-
-				nums_ptr->seq_no = seq_no;
-				nums_ptr->ack_no = ack_seq;
-
-				if (bpf_map_update_elem(&numbers_map, &conn, nums_ptr, 0) < 0) {
-					bpf_printk("REMATCH - Unable to upate numbers object for (conn.src %u, conn.dst %u)\n", conn.src_port, conn.dst_port);
 					action = XDP_ABORTED;
 					goto OUT;
 				}
@@ -604,7 +600,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				__s32 s_seq_offset = server_nums_ptr->ack_no - nums_ptr->ack_no;
 				__s32 s_ack_offset = server_nums_ptr->seq_no - nums_ptr->seq_no;
 
-				// // // First correct client->LB reroute
+				// First correct client->LB reroute
 				reroute_ptr->original_conn = reroute_ptr->new_conn;
 				reroute_ptr->original_index = reroute_ptr->new_index;
 				reroute_ptr->original_eth = reroute_ptr->new_eth;

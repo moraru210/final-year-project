@@ -23,11 +23,15 @@
 #endif
 
 #ifndef MAX_CLIENTS
-#define MAX_CLIENTS 10
+#define MAX_CLIENTS 4
 #endif
 
 #ifndef MAX_SERVERS
-#define MAX_SERVERS 10
+#define MAX_SERVERS 3
+#endif
+
+#ifndef MAX_PER_SERVER
+#define MAX_PER_SERVER 3
 #endif
 
 #define LB_LISTENER_PORT 8080
@@ -51,15 +55,15 @@ struct connection {
 };
 
 struct reroute {
-	struct connection original_conn; // 16 bytes
-	struct eth_conn original_eth; // 12
-	__u32 original_index; // 4
-    __s32 seq_offset; // 4
-	__s32 ack_offset; // 4
- 	__u32 rematch_flag; // 4
-    struct connection new_conn; // 16 
-	struct eth_conn new_eth; // 12
-	__u32 new_index; // 4
+	struct connection original_conn; 
+	struct eth_conn original_eth; 
+	__u32 original_index; 
+    __s32 seq_offset; 
+	__s32 ack_offset;
+ 	__u32 rematch_flag;
+    struct connection new_conn;
+	struct eth_conn new_eth;
+	__u32 new_index;
 };
 
 struct numbers {
@@ -76,8 +80,8 @@ struct server {
 };
 
 struct availability {
-	struct connection conns[MAX_CLIENTS];
-	__u32 valid[MAX_CLIENTS];
+	struct connection conns[MAX_PER_SERVER];
+	__u32 valid[MAX_PER_SERVER];
 };
 
 // /* Define maps */
@@ -91,7 +95,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, MAX_CLIENTS + (MAX_SERVERS*MAX_CLIENTS));
+	__uint(max_entries, MAX_CLIENTS + (MAX_SERVERS*MAX_PER_SERVER));
 	__type(key, struct connection);
 	__type(value, struct numbers);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
@@ -451,10 +455,8 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				action = XDP_ABORTED;
 				goto OUT;
 			} else {
-				struct availability availability = *(availability_ptr);
 				__u32 index = reroute_ptr->original_index;
-				__u32 max_size = sizeof(availability.conns) / sizeof(availability.conns[0]);
-				if (index >= max_size) {
+				if (index >= MAX_PER_SERVER) {
 					bpf_printk("index: %u", index);
 					bpf_printk("ABORT PACKET");
 					action = XDP_ABORTED;
@@ -550,21 +552,19 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 					action = XDP_ABORTED;
 					goto OUT;
 				} else {
-					struct availability availability = *(availability_ptr);
 					__u32 index = reroute_ptr->original_index;
-					__u32 max_size = sizeof(availability.conns) / sizeof(availability.conns[0]);
-					if (index >= max_size) {
+					if (index >= MAX_PER_SERVER) {
 						bpf_printk("index: %u", index);
 						bpf_printk("ABORT PACKET");
 						action = XDP_ABORTED;
 						goto OUT;
 					} else {
 						bpf_printk("index: %u", index);
-						availability.valid[index] = 0;
+						availability_ptr->valid[index] = 0;
 					}
 
 					//need to update available_map with new availability information
-					if (bpf_map_update_elem(&available_map, &server, &availability, 0) < 0) {
+					if (bpf_map_update_elem(&available_map, &server, availability_ptr, 0) < 0) {
 						bpf_printk("unable to update available_map to invalidate old map");
 						bpf_printk("ABORT PACKET");
 						action = XDP_ABORTED;
@@ -586,7 +586,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 					goto OUT;
 				}
 
-				// rev_server direction: server ---> middlebox
+	// 			// rev_server direction: server ---> middlebox
 				struct connection rev_server = create_reverse_conn(&reroute_ptr->original_conn);
 				if (bpf_map_delete_elem(&conn_map, &rev_server) < 0) {
 					bpf_printk("REMATCH - Unable to delete reroute object for (conn.src %u, conn.dst %u)\n", rev_server.src_port, rev_server.dst_port);
@@ -614,7 +614,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 					goto OUT;
 				}
 
-				struct reroute rev_reroute;
+				struct reroute rev_reroute = *(reroute_ptr);
 				rev_reroute.original_conn = create_reverse_conn(&conn);
 				__builtin_memcpy(rev_reroute.original_eth.src.addr, ethh->h_dest, ETH_ALEN);
 				__builtin_memcpy(rev_reroute.original_eth.dst.addr, ethh->h_source, ETH_ALEN);
@@ -625,7 +625,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				__builtin_memcpy(rev_reroute.new_eth.src.addr, ethh->h_dest, ETH_ALEN);
 				__builtin_memcpy(rev_reroute.new_eth.dst.addr, ethh->h_source, ETH_ALEN);
 				rev_reroute.new_conn = rev_reroute.original_conn;
-				rev_reroute.rematch_flag = 0;
+
 				struct connection rev_new_server = create_reverse_conn(&reroute_ptr->new_conn);
 
 				if (bpf_map_update_elem(&conn_map, &rev_new_server, &rev_reroute, 0) < 0) {

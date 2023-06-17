@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
 	"net"
 	"os"
 	"os/signal"
@@ -26,10 +27,14 @@ const (
 
 var (
 	round_robin           = 0
+	server                = 0
+	level                 = -1
 	last_server_no        = first_server_no
 	targets               []Server
 	current_targets_conns []net.Conn
-	lb_ip                 = net.ParseIP("127.0.0.1")
+	serverMap             = make(map[uint32][]Server)
+
+	lb_ip = net.ParseIP("127.0.0.1")
 )
 
 func main() {
@@ -452,9 +457,16 @@ func acceptConnection(ln net.Listener) net.Conn {
 }
 
 func chooseServerConn(available_map *ebpf.Map) (*Connection, int) {
-	chosen_server_i := round_robin % len(targets)
+	if (round_robin % server) == 0 {
+		level += 1
+	}
+
+	chosen_server_i := round_robin % (MAX_SERVERS)
+	index := chosen_server_i * MAX_SERVERS
+
+	chosen_server := targets[index+level]
+
 	round_robin += 1
-	chosen_server := targets[chosen_server_i]
 
 	return grabServerConn(chosen_server, available_map)
 }
@@ -503,7 +515,8 @@ func addServers(available_map *ebpf.Map, ipAddr net.IP, port uint32) {
 	// if end-1 > MAX_SERVERS {
 	// 	fmt.Printf("Unable to add %d, since it will become above limit\n", quanity)
 	// }
-	for j := 0; j < MAX_CLIENTS; j++ {
+
+	for j := 0; j < max_per_server; j++ {
 		newServer(int(port), j, available_map, ipAddr)
 	}
 }
@@ -543,6 +556,7 @@ func newServer(target_index int, conn_index int, available_map *ebpf.Map, ipAddr
 	insertToAvailableMap(conn, available_map, conn_index, ipAddr)
 
 	current_targets_conns = append(current_targets_conns, conn)
+	server += 1
 }
 
 func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, ipAddr net.IP) {
@@ -559,8 +573,8 @@ func insertToAvailableMap(conn net.Conn, available_map *ebpf.Map, index int, ipA
 	var availability Availability
 	if index == 0 {
 		availability = Availability{
-			Conns: [MAX_CLIENTS]Connection{},
-			Valid: [MAX_CLIENTS]uint32{},
+			Conns: [max_per_server]Connection{},
+			Valid: [max_per_server]uint32{},
 		}
 	} else {
 		if err := available_map.Lookup(server, &availability); err != nil {

@@ -1,8 +1,9 @@
 package main
 
-const MAX_CLIENTS = 10
-const MAX_SERVERS = 10
+const MAX_CLIENTS = 4
+const MAX_SERVERS = 3
 const ETH_ALEN = 6
+const max_per_server = 3
 
 type Connection struct {
 	Src_port uint32
@@ -37,8 +38,8 @@ type Server struct {
 }
 
 type Availability struct {
-	Conns [MAX_CLIENTS]Connection
-	Valid [MAX_CLIENTS]uint32
+	Conns [max_per_server]Connection
+	Valid [max_per_server]uint32
 }
 
 type Eth_conn struct {

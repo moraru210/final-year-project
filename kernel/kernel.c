@@ -291,27 +291,27 @@ static inline int from_client(struct connection *conn)
 	return 0;
 }
 
-static inline int generate_and_insert_numbers(struct connection conn, __u32 *seq_no, __u32 *ack_no, struct eth_conn *cur_eth) {
-	struct numbers nums;
-	nums.seq_no = *ack_no;
-	nums.ack_no = *seq_no + 1;
+// static inline int generate_and_insert_numbers(struct connection conn, __u32 *seq_no, __u32 *ack_no, struct eth_conn *cur_eth) {
+// 	struct numbers nums;
+// 	nums.seq_no = *ack_no;
+// 	nums.ack_no = *seq_no + 1;
 
-	nums.init_seq = nums.seq_no;
-	nums.init_ack = nums.ack_no;
+// 	nums.init_seq = nums.seq_no;
+// 	nums.init_ack = nums.ack_no;
 
-	nums.cur_eth = *cur_eth;
+// 	nums.cur_eth = *cur_eth;
 
-	bpf_printk("Number struct generated\n");
-	bpf_printk("Nums.seq: %u\n", nums.seq_no);
-	bpf_printk("Nums.ack: %u\n", nums.ack_no);
+// 	bpf_printk("Number struct generated\n");
+// 	bpf_printk("Nums.seq: %u\n", nums.seq_no);
+// 	bpf_printk("Nums.ack: %u\n", nums.ack_no);
 
-	bpf_printk("NUMS - conn.srcPort %u, conn.dstPort %u, conn.srcIP %u, conn.dstIP %u", conn.src_port, conn.dst_port, conn.src_ip, conn.dst_ip);
-	if (bpf_map_update_elem(&numbers_map, &conn, &nums, 0) < 0) {
-		bpf_printk("Unable to introduce (conn.src: %u, conn.dst: %u) to numbers_map\n", conn.src_port, conn.dst_port);
-		return 0;
-	}
-	return 1;
-}
+// 	bpf_printk("NUMS - conn.srcPort %u, conn.dstPort %u, conn.srcIP %u, conn.dstIP %u", conn.src_port, conn.dst_port, conn.src_ip, conn.dst_ip);
+// 	if (bpf_map_update_elem(&numbers_map, &conn, &nums, 0) < 0) {
+// 		bpf_printk("Unable to introduce (conn.src: %u, conn.dst: %u) to numbers_map\n", conn.src_port, conn.dst_port);
+// 		return 0;
+// 	}
+// 	return 1;
+// }
 
 static inline void modify_seq_ack(struct tcphdr **tcph_ptr, signed int seq_off, signed int ack_off) {
 	struct tcphdr *tcph = *(tcph_ptr);
@@ -388,6 +388,13 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	// Query map for possible routing
 	struct reroute *reroute_ptr = bpf_map_lookup_elem(&conn_map, &conn);
 	if (!reroute_ptr) {
+		bpf_printk("No reroute found");
+		bpf_printk("Payload is %u", payload_len);
+		if (from_client(&conn) && payload_len > 0) {
+			action = XDP_ABORTED;
+			bpf_printk("detected request packet that arrived before reroute init (SRC: %u, DST: %u)", conn.src_port, conn.dst_port);
+			goto OUT;
+		}
 		
 		//bpf_printk("REROUTE - could not query conn_map for routing\n");
 		// Introduce the seq and ack into NUMBERS_STRUCT for respective CONN
@@ -413,13 +420,33 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			struct eth_conn rev_cur;
 			__builtin_memcpy(rev_cur.src.addr, ethh->h_dest, sizeof(struct eth_addr));
 			__builtin_memcpy(rev_cur.dst.addr, ethh->h_source, sizeof(struct eth_addr));
-			
-			//bpf_printk("REROUTE - rev_conn.src: %u, rev_conn.dst: %u\n", rev_conn.src_port, rev_conn.dst_port);
-			if (generate_and_insert_numbers(rev_conn, &seq_no, &ack_seq, &rev_cur) == 0) {
-				bpf_printk("ABORT - Unable to insert numbers for conn\n");
+
+			struct numbers nums;
+			nums.seq_no =  ack_seq;
+			nums.ack_no =  seq_no + 1;
+
+			nums.init_seq = nums.seq_no;
+			nums.init_ack = nums.ack_no;
+
+			nums.cur_eth = rev_cur;
+
+			bpf_printk("Number struct generated\n");
+			bpf_printk("Nums.seq: %u\n", nums.seq_no);
+			bpf_printk("Nums.ack: %u\n", nums.ack_no);
+
+			bpf_printk("NUMS - conn.srcPort %u, conn.dstPort %u, conn.srcIP %u, conn.dstIP %u", conn.src_port, conn.dst_port, conn.src_ip, conn.dst_ip);
+			if (bpf_map_update_elem(&numbers_map, &rev_conn, &nums, 0) < 0) {
+				bpf_printk("Unable to introduce (conn.src: %u, conn.dst: %u) to numbers_map\n", conn.src_port, conn.dst_port);
 				action = XDP_ABORTED;
 				goto OUT;
 			}
+			
+			//bpf_printk("REROUTE - rev_conn.src: %u, rev_conn.dst: %u\n", rev_conn.src_port, rev_conn.dst_port);
+			// if (generate_and_insert_numbers(rev_conn, &seq_no, &ack_seq, &rev_cur) == 0) {
+			// 	bpf_printk("ABORT - Unable to insert numbers for conn\n");
+			// 	action = XDP_ABORTED;
+			// 	goto OUT;
+			// }
 		}
 		goto OUT;
 

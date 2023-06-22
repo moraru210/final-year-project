@@ -1,13 +1,26 @@
-# Final Year Project
+# Final Year Project - REMATCHER
 Repository dedicated for my final year project at Imperial College London. 
 
-The project aims to bridge the gap between layer 4 and 7 load balancer categories (however still working at the 4th layer) by creating a load balancer that can remix the connection table initial matching without having to terminate connections already set up.
+## How To Run
+```
+sudo make TARGET=<interface> MAX_SERVERS=<integer> MAX_CLIENTS=<integer> MAX_PER_SERVER=<integer> IPv4=<address>
+```
 
-Requirements from project:
-- The design should work in the presence of packet loss and retransmissions.
-- The design should work in the presence of out of order packets.
+## Project's Motivation
+Is there a middle-ground in terms of benefits when considering the layer-4 versus layer-7 and software versus hardware categories?
 
-Assumptions made:
+Ideally every system wants to capture both the higher throughput of a layer-4 load-balancer, in addition to the uniformity of load brought by a layer-7 since it leads to a decrease in tail-latency. If the possibility of modifying a layer-4 load-balancer’s approach to packet-forwarding was improved 5 to spread network load better, we would be able to reciprocate benefits that layer-7 load-balancers showcase. At the same time, it is vital that we maintain a similar standard in benefits that layer-4 load-balancers provide - otherwise we would circle back to the same dilemma of being on polar ends in terms of benefits.
+
+In regards to the medium, every system would also want to strike the balance between performance and flexibility. In recent times there has been rapid development on technology that avoids the inefficiencies of context switching between userspace and kernel level - meanwhile, it is able to provide similar levels of programmability to match the flexibility standard of software-based loadbalancers. The benefit of improving performance is an important matter when considering the typical usage of load-balancers within microservices architectures, which is dominating in terms of popularity and showcases microsecond scale communication. However, it is also important to provide flexibility as it was a foundational motivation to strive away from monolithic architectures.
+
+## Project's Approach
+In regards to the gap between layer-4 and layer-7, this project aims to find the balance by moving away from the strict use of ’sticky’ sessions that typical layer-4 load-balancers adopt. Specifically, we want to provide a layer-4 load-balancer the freedom to switch target servers if it is deemed to bring wanted benefits such as uniformity of load in the system - in the hopes that it leads to reduction in tail-latency within the system or increase the overall utilisation of resources.
+
+We want to provide this freedom of choice while respectably maintaining the qualities that a layer-4 flavour provides. In this regard, the main quality we will continuously inspect and aim to improve is throughput, since it is the principle factor that influences the decision of choosing layer-4 over layer-7.
+
+Furthermore, the debate of picking which medium to use for this project will also have an influence on throughput. For this project we decide to pursue an eBPF solution, as we want to explore the advantages in terms of throughput and overhead latency it can showcase when compared to software-based solutions. eBPF is technology that provides a good balance in terms of performance as it overcomes the inefficiencies of context switching, but also provides the needed flexibility and programmability
+
+## Assumptions
 - There is a single outstanding request for every connection.
 - To get a reply the request must have been fully received.
 - To get the next request the previous response must have been fully received.

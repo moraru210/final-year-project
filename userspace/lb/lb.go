@@ -32,7 +32,6 @@ var (
 	last_server_no        = first_server_no
 	targets               []Server
 	current_targets_conns []net.Conn
-	serverMap             = make(map[uint32][]Server)
 
 	lb_ip = net.ParseIP("127.0.0.1")
 )

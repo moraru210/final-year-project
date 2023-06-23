@@ -291,28 +291,6 @@ static inline int from_client(struct connection *conn)
 	return 0;
 }
 
-// static inline int generate_and_insert_numbers(struct connection conn, __u32 *seq_no, __u32 *ack_no, struct eth_conn *cur_eth) {
-// 	struct numbers nums;
-// 	nums.seq_no = *ack_no;
-// 	nums.ack_no = *seq_no + 1;
-
-// 	nums.init_seq = nums.seq_no;
-// 	nums.init_ack = nums.ack_no;
-
-// 	nums.cur_eth = *cur_eth;
-
-// 	bpf_printk("Number struct generated\n");
-// 	bpf_printk("Nums.seq: %u\n", nums.seq_no);
-// 	bpf_printk("Nums.ack: %u\n", nums.ack_no);
-
-// 	bpf_printk("NUMS - conn.srcPort %u, conn.dstPort %u, conn.srcIP %u, conn.dstIP %u", conn.src_port, conn.dst_port, conn.src_ip, conn.dst_ip);
-// 	if (bpf_map_update_elem(&numbers_map, &conn, &nums, 0) < 0) {
-// 		bpf_printk("Unable to introduce (conn.src: %u, conn.dst: %u) to numbers_map\n", conn.src_port, conn.dst_port);
-// 		return 0;
-// 	}
-// 	return 1;
-// }
-
 static inline void modify_seq_ack(struct tcphdr **tcph_ptr, signed int seq_off, signed int ack_off) {
 	struct tcphdr *tcph = *(tcph_ptr);
 	__u32 cur_seq = bpf_ntohl(tcph->seq);
@@ -341,6 +319,34 @@ static inline struct server create_server_struct(struct connection *conn)
 	server.port = conn->dst_port;
 	server.ip = conn->dst_ip;
 	return server;
+}
+
+static inline int set_conn_available(struct server *server_ptr, struct reroute *reroute_ptr) 
+{
+	struct availability *availability_ptr = bpf_map_lookup_elem(&available_map, server_ptr);
+	if (!availability_ptr) {
+		bpf_printk("could not find avaialability in order to invalidate reroute.original");
+		bpf_printk("ABORT PACKET");
+		return -1;
+	} else {
+		__u32 index = reroute_ptr->original_index;
+		if (index >= MAX_PER_SERVER) {
+			bpf_printk("index: %u", index);
+			bpf_printk("ABORT PACKET");
+			return -1;
+		} else {
+			bpf_printk("index: %u", index);
+			availability_ptr->valid[index] = 0;
+		}
+
+		//need to update available_map with new availability information
+		if (bpf_map_update_elem(&available_map, server_ptr, availability_ptr, 0) < 0) {
+			bpf_printk("unable to update available_map to invalidate old conn");
+			bpf_printk("ABORT PACKET");
+			return -1;
+		}
+	}
+	return 0;
 }
 
 SEC("xdp_tcp")
@@ -388,15 +394,13 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 	// Query map for possible routing
 	struct reroute *reroute_ptr = bpf_map_lookup_elem(&conn_map, &conn);
 	if (!reroute_ptr) {
-		bpf_printk("No reroute found");
-		bpf_printk("Payload is %u", payload_len);
+		
 		if (from_client(&conn) && payload_len > 0) {
 			action = XDP_ABORTED;
 			bpf_printk("detected request packet that arrived before reroute init (SRC: %u, DST: %u)", conn.src_port, conn.dst_port);
 			goto OUT;
 		}
 		
-		//bpf_printk("REROUTE - could not query conn_map for routing\n");
 		// Introduce the seq and ack into NUMBERS_STRUCT for respective CONN
 		if (tcph->ack && from_client(&conn)) {
 			bpf_printk("CONN - src port: %u, dst port: %u", conn.src_port, conn.dst_port);
@@ -424,29 +428,15 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			struct numbers nums;
 			nums.seq_no =  ack_seq;
 			nums.ack_no =  seq_no + 1;
-
 			nums.init_seq = nums.seq_no;
 			nums.init_ack = nums.ack_no;
-
 			nums.cur_eth = rev_cur;
 
-			bpf_printk("Number struct generated\n");
-			bpf_printk("Nums.seq: %u\n", nums.seq_no);
-			bpf_printk("Nums.ack: %u\n", nums.ack_no);
-
-			bpf_printk("NUMS - conn.srcPort %u, conn.dstPort %u, conn.srcIP %u, conn.dstIP %u", conn.src_port, conn.dst_port, conn.src_ip, conn.dst_ip);
 			if (bpf_map_update_elem(&numbers_map, &rev_conn, &nums, 0) < 0) {
 				bpf_printk("Unable to introduce (conn.src: %u, conn.dst: %u) to numbers_map\n", conn.src_port, conn.dst_port);
 				action = XDP_ABORTED;
 				goto OUT;
 			}
-			
-			//bpf_printk("REROUTE - rev_conn.src: %u, rev_conn.dst: %u\n", rev_conn.src_port, rev_conn.dst_port);
-			// if (generate_and_insert_numbers(rev_conn, &seq_no, &ack_seq, &rev_cur) == 0) {
-			// 	bpf_printk("ABORT - Unable to insert numbers for conn\n");
-			// 	action = XDP_ABORTED;
-			// 	goto OUT;
-			// }
 		}
 		goto OUT;
 
@@ -475,30 +465,9 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			//grab avaialability from available map
 			//set valid[reroute.index] = 0 (not in use anymore)
 			struct server server = create_server_struct(&reroute_ptr->original_conn);
-			struct availability *availability_ptr = bpf_map_lookup_elem(&available_map, &server);
-			if (!availability_ptr) {
-				bpf_printk("could not find avaialability in order to invalidate reroute.original");
-				bpf_printk("ABORT PACKET");
-				action = XDP_ABORTED;
-				goto OUT;
-			} else {
-				__u32 index = reroute_ptr->original_index;
-				if (index >= MAX_PER_SERVER) {
-					bpf_printk("index: %u", index);
-					bpf_printk("ABORT PACKET");
+			if (set_conn_available(&server, reroute_ptr) < 0) {
 					action = XDP_ABORTED;
 					goto OUT;
-				} else {
-					availability_ptr->valid[index] = 0;
-				}
-
-				//need to update available_map with new availability information
-				if (bpf_map_update_elem(&available_map, &server, availability_ptr, 0) < 0) {
-					bpf_printk("unable to update available_map to invalidate old map");
-					bpf_printk("ABORT PACKET");
-					action = XDP_ABORTED;
-					goto OUT;
-				}
 			}
 
 			if (bpf_map_delete_elem(&conn_map, &conn)) {
@@ -570,33 +539,10 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 				// Safe to initiate rematching process
 				// State == 2 symbolises that it was previously in resp recv state
 				// Hence, now it is safely transitioned to req recv state for first time in transaction
-
 				struct server server = create_server_struct(&reroute_ptr->original_conn);
-				struct availability *availability_ptr = bpf_map_lookup_elem(&available_map, &server);
-				if (!availability_ptr) {
-					bpf_printk("could not find avaialability in order to invalidate reroute.original");
-					bpf_printk("ABORT PACKET");
+				if (set_conn_available(&server, reroute_ptr) < 0) {
 					action = XDP_ABORTED;
 					goto OUT;
-				} else {
-					__u32 index = reroute_ptr->original_index;
-					if (index >= MAX_PER_SERVER) {
-						bpf_printk("index: %u", index);
-						bpf_printk("ABORT PACKET");
-						action = XDP_ABORTED;
-						goto OUT;
-					} else {
-						bpf_printk("index: %u", index);
-						availability_ptr->valid[index] = 0;
-					}
-
-					//need to update available_map with new availability information
-					if (bpf_map_update_elem(&available_map, &server, availability_ptr, 0) < 0) {
-						bpf_printk("unable to update available_map to invalidate old map");
-						bpf_printk("ABORT PACKET");
-						action = XDP_ABORTED;
-						goto OUT;
-					}
 				}
 
 				struct numbers *nums_ptr = bpf_map_lookup_elem(&numbers_map, &conn);
@@ -613,7 +559,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 					goto OUT;
 				}
 
-	// 			// rev_server direction: server ---> middlebox
+	 			// rev_server direction: server ---> middlebox
 				struct connection rev_server = create_reverse_conn(&reroute_ptr->original_conn);
 				if (bpf_map_delete_elem(&conn_map, &rev_server) < 0) {
 					bpf_printk("REMATCH - Unable to delete reroute object for (conn.src %u, conn.dst %u)\n", rev_server.src_port, rev_server.dst_port);

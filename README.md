@@ -1,5 +1,5 @@
 # Final Year Project - REMATCHER
-Repository dedicated for my final year project at Imperial College London. 
+Rematcher - A repository dedicated for my final year project at Imperial College London. 
 
 ## How To Start
 ```

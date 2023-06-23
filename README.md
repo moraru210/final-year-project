@@ -5,6 +5,12 @@ Repository dedicated for my final year project at Imperial College London.
 ```
 sudo make TARGET=<interface> MAX_SERVERS=<integer> MAX_CLIENTS=<integer> MAX_PER_SERVER=<integer> IPv4=<address>
 ```
+- `TARGET` the network interface to attach the XDP code onto
+- `IPv4` the IP address assigned to the load-balancer
+- `MAX_CLIENTS` maximum number of clients the load-balancer will endure
+- `MAX_SERVERS` maximum number of servers the load-balancer will endure
+- `MAX_PER_SERVER` number of open connections between the middlebox and each server
+
 
 ## Project's Motivation
 Is there a middle-ground in terms of benefits when considering the layer-4 versus layer-7 and software versus hardware categories?

@@ -52,6 +52,7 @@ $(XDP_OBJ): %.o: %.c  Makefile $(OBJECT_LIBBPF)
 	    -target bpf \
 		-D MAX_CLIENTS=$(MAX_CLIENTS) \
 		-D MAX_SERVERS=$(MAX_SERVERS) \
+		-D MAX_PER_SERVER=$(MAX_PER_SERVER) \
 	    -D __BPF_TRACING__ \
 	    $(BPF_CFLAGS) \
 	    -Wall \

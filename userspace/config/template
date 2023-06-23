@@ -3,7 +3,7 @@ package main
 const MAX_CLIENTS = MAX_CLIENTS_VAL
 const MAX_SERVERS = MAX_SERVERS_VAL
 const ETH_ALEN = 6
-const max_per_server = 3
+const max_per_server = MAX_PER_SERVER_VAL
 
 type Connection struct {
 	Src_port uint32

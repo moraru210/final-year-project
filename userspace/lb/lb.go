@@ -103,8 +103,8 @@ func controlPanel(available_map *ebpf.Map, conn_map *ebpf.Map, numbers_map *ebpf
 		fmt.Print("*** CONTROL PANEL ***\n")
 		fmt.Println("Enter your choice:")
 		fmt.Println("Options: 1. rematch <client_addr> <server_addr>")
-		fmt.Println("         2. add <quantity>")
-		fmt.Println("         3. remove <quantity>")
+		fmt.Println("         2. add <ipv4:port_no>")
+		fmt.Println("         3. remove <ipv4:port_no>")
 
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
@@ -223,6 +223,7 @@ func delete_from_current(target_port uint32, ipAddr net.IP) []net.Conn {
 		if uint32(remote_addr.Port) == target_port && remote_addr.IP.String() == ipAddr.String() {
 			to_delete = append(to_delete, current_conn)
 			current_targets_conns = append(current_targets_conns[:i], current_targets_conns[i+1:]...)
+			targets = append(targets[:i], targets[i+1:]...)
 			i--
 		}
 	}
@@ -402,7 +403,7 @@ func grabNumbersForConns(client_conn Connection, server_conn Connection, numbers
 	if err != nil {
 		fmt.Printf("LB - Initial Offsets: unable to retrieve numbers for client_conn: %v\n", err)
 	} else {
-		//fmt.Printf("server.SrcPort is  %d server.DstPort is %d\n", server_conn.Src_port, server_conn.Dst_port)
+		fmt.Printf("server.SrcPort is  %d server.DstPort is %d\n", server_conn.Src_port, server_conn.Dst_port)
 		err = numbers_map.Lookup(server_conn, &server_n)
 		if err != nil {
 			fmt.Printf("LB - Initial Offsets: unable to retrieve numbers for server_conn: %v\n", err)
@@ -465,7 +466,7 @@ func chooseServerConn(available_map *ebpf.Map) (*Connection, int) {
 	index := chosen_server_i * MAX_SERVERS
 
 	chosen_server := targets[index+level]
-
+	fmt.Println("CHOSEN_SERVER: ", chosen_server)
 	round_robin += 1
 
 	return grabServerConn(chosen_server, available_map)

@@ -16,12 +16,13 @@ const (
 	outputFile    = "../lb/structs.go"
 	maxClientsVar = "MAX_CLIENTS"
 	maxServersVar = "MAX_SERVERS"
+	maxPerVar     = "MAX_PER_SERVER"
 )
 
 func main() {
 	args := os.Args[1:]
-	if len(args) != 2 {
-		fmt.Printf("Usage: go run generate.go <MAX_CLIENTS> <MAX_SERVERS>\n")
+	if len(args) != 3 {
+		fmt.Printf("Usage: go run generate.go <MAX_CLIENTS> <MAX_SERVERS> <MAX_PER_SERVER>\n")
 		os.Exit(1)
 	}
 
@@ -39,6 +40,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	maxPerStr := args[2]
+	maxPer, err := strconv.Atoi(maxPerStr)
+	if err != nil {
+		fmt.Printf("Invalid value for MAX_PER_SERVER: %s\n", maxPerStr)
+		os.Exit(1)
+	}
+
 	if maxClients <= 0 {
 		fmt.Printf("Invalid value for environment variable %s: %d\n", maxClientsVar, maxClients)
 		os.Exit(1)
@@ -46,6 +54,11 @@ func main() {
 
 	if maxServers <= 0 {
 		fmt.Printf("Invalid value for environment variable %s: %d\n", maxServersVar, maxServers)
+		os.Exit(1)
+	}
+
+	if maxPer <= 0 {
+		fmt.Printf("Invalid value for environment variable %s: %d\n", maxPerVar, maxPer)
 		os.Exit(1)
 	}
 
@@ -58,6 +71,7 @@ func main() {
 	templateContent := string(templateBytes)
 	templateContent = strings.Replace(templateContent, "MAX_CLIENTS_VAL", strconv.Itoa(maxClients), 2)
 	templateContent = strings.Replace(templateContent, "MAX_SERVERS_VAL", strconv.Itoa(maxServers), 2)
+	templateContent = strings.Replace(templateContent, "MAX_PER_SERVER_VAL", strconv.Itoa(maxPer), 2)
 
 	err = ioutil.WriteFile(outputFile, []byte(templateContent), 0644)
 	if err != nil {
@@ -65,5 +79,5 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Generated %s with MAX_CLIENTS=%d\n", outputFile, maxClients)
+	fmt.Printf("Generated %s with MAX_CLIENTS=%d, MAX_SERVERS=%d, MAX_PER_SERVER=%d\n", outputFile, maxClients, maxServers, maxPer)
 }

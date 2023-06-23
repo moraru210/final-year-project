@@ -68,3 +68,14 @@ sudo bash kernel/setup.sh load <interface>
 ```
 
 The script automatically looks for the ELF object file for the compiled `kernel.c` code and attaches it using `xdp-loader`. However, you may also utilise `xdp-loader` directly if you prefer not to use the srcipt.
+
+## Control Plane
+The code for the control-plane is located in the `userspace` folder. Specfically the logic is located in the `userspace/lb`, where in order to build it you run:
+```
+go build .
+```
+
+To start the control-plane, you run the following code:
+```
+sudo ./lb <IPv4 address> <interface>
+```

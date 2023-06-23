@@ -79,3 +79,11 @@ To start the control-plane, you run the following code:
 ```
 sudo ./lb <IPv4 address> <interface>
 ```
+
+In order for the control-plane to access the same maps that the data-plane does, you need to ensure that the `structs` utilised to marshall the data read or inserted in the maps matches the ones used to created the map in `kernel/kernel.c`. You can do this my entering the `userspace/config` directory and generating the correct structs by running:
+
+```
+go generate.go MAX_CLIENTS MAX_SERVERS MAX_PER_SERVER
+```
+
+Where the paramaters utilised should match exactly the ones utilised in the data-plane code.

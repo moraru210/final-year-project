@@ -17,6 +17,10 @@ Once Rematcher is running, you will prompted with the 'control panel' where you 
 add (IPv4 address):(port number)
 ```
 
+Example servers in this repo include:
+- `userspace/server/http`
+- `userspace/server/text-file`
+
 ## How To Rematcher Server(s)
 When Rematcher is running, to remove servers you run:
 ```

@@ -48,6 +48,18 @@ We want to provide this freedom of choice while respectably maintaining the qual
 
 Furthermore, the debate of picking which medium to use for this project will also have an influence on throughput. For this project we decide to pursue an eBPF solution, as we want to explore the advantages in terms of throughput and overhead latency it can showcase when compared to software-based solutions. eBPF is technology that provides a good balance in terms of performance as it overcomes the inefficiencies of context switching, but also provides the needed flexibility and programmability
 
+## Setup - Dependencies (for Ubuntu)
+Make sure to run the following for the XDP dependencies:
+```
+sudo apt install clang llvm libelf-dev libpcap-dev gcc-multilib build-essential
+sudo apt install linux-tools-$(uname -r)
+sudo apt install linux-headers-$(uname -r)
+sudo apt install linux-tools-common linux-tools-generic
+sudo apt install tcpdump
+```
+
+In addition, the control-plane code utilises Golang, so make sure to have `go1.18` or above.
+
 ## Assumptions
 - There is a single outstanding request for every connection.
 - To get a reply the request must have been fully received.

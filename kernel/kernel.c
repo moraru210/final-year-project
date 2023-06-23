@@ -349,6 +349,18 @@ static inline int set_conn_available(struct server *server_ptr, struct reroute *
 	return 0;
 }
 
+static inline int update_state(struct reroute *reroute_ptr, __u32 *value)
+{
+	struct server client;
+	client.ip = reroute_ptr->original_conn.dst_ip;
+	client.port = reroute_ptr->original_conn.dst_port;
+	if (bpf_map_update_elem(&state_map, &client, value, 0) < 0) {
+		bpf_printk("STATE - unable to change state to 1 for original_conn.dst: %u\n", reroute_ptr->original_conn.dst_port);
+		return -1;
+	}
+	return 0;
+}
+
 SEC("xdp_tcp")
 int  xdp_prog_tcp(struct xdp_md *ctx)
 {
@@ -612,21 +624,13 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 		// Update state to be zero
 		if (payload_len > 0 && from_client(&conn)) {
 			__u32 zero = 0;
-			struct server client;
-			client.ip = conn.src_ip;
-			client.port = conn.src_port;
-			if (bpf_map_update_elem(&state_map, &client, &zero, 0) < 0) {
-				//bpf_printk("STATE - unable to change state to 0 for conn.src: %u\n", conn.src_port);
+			if (update_state(reroute_ptr, &zero) < 0) {
 				action = XDP_ABORTED;
 				goto OUT;
 			}
 		} else if (payload_len > 0) {
 			__u32 one = 1;
-			struct server client;
-			client.ip = reroute_ptr->original_conn.dst_ip;
-			client.port = reroute_ptr->original_conn.dst_port;
-			if (bpf_map_update_elem(&state_map, &client, &one, 0) < 0) {
-				//bpf_printk("STATE - unable to change state to 1 for original_conn.dst: %u\n", reroute_ptr->original_conn.dst_port);
+			if (update_state(reroute_ptr, &one) < 0) {
 				action = XDP_ABORTED;
 				goto OUT;
 			}

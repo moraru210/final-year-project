@@ -54,4 +54,17 @@ Furthermore, the debate of picking which medium to use for this project will als
 - To get the next request the previous response must have been fully received.
 
 ## Implementation
-The project comprises of two main components. The first is the kernel code, located in the `kernel` folder in the repository and it is attached to a network device. The other component is code that runs in userspace, which is located in the `userspace` folder in the repository.
+The project comprises of two main components. The first is the data-plane code, located in the `kernel` folder of the repository and it is meant to attached to a network device's `XDP_HOOK`. The other component is the control-plane code that runs in userspace, which is located in the `userspace` folder in the repository.
+
+## Data Plane
+The code for the data-plane is located in the `kernel` folder, where the main logic is located in `kernel.c`. To compile the eBPF code, run `make` in the subfolder and you may pass the arguments as shown already in the first subsection of this README. These arguments specifically are `MAX_CLIENTS`, `MAX_PER_SERVER`, and `MAX_SERVERS`. 
+
+In order for the XDP code to run on the ingress received by the network interface, you need to load/attach it onto the interface. This can be done using a customly written loader, however this project utilises `xdp-loader` from `xdp-tools`. In order to utilise the tool, make sure to run `make` in the `xdp-tools/xdp-loader` folder.
+
+This project created a script `kernel/setup.sh` where it utilises `xdp-loader` under the tool to load, unload or view the status of all the network interfaces on the system. An example of how to run it is below:
+
+```
+sudo bash kernel/setup.sh load <interface>
+```
+
+The script automatically looks for the ELF object file for the compiled `kernel.c` code and attaches it using `xdp-loader`. However, you may also utilise `xdp-loader` directly if you prefer not to use the srcipt.

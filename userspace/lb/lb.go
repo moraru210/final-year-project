@@ -42,6 +42,7 @@ func main() {
 
 	fmt.Println("MAX_CLIENTS: ", MAX_CLIENTS)
 	fmt.Println("MAX_SERVERS: ", MAX_SERVERS)
+	fmt.Println("MAX_PER_SERVER: ", max_per_server)
 
 	if len(os.Args) != 3 {
 		fmt.Println("EXPECTED: LB <IPv4> <IFACE>")
@@ -59,7 +60,7 @@ func main() {
 
 	//map handling
 	path := root_path + iface + connection_map_path
-	fmt.Println("PATH: ", path)
+	//fmt.Println("PATH: ", path)
 	conn_map, err := ebpf.LoadPinnedMap(path, nil)
 	if err != nil {
 		fmt.Printf("Could not open %s\n", connection_map_path)
@@ -92,7 +93,7 @@ func main() {
 
 	// Wait for interrupt signal
 	<-interrupt
-	fmt.Println("\nInterrupt signal received. Cleaning up...")
+	fmt.Println("\nInterrupt signal received")
 }
 
 func controlPanel(available_map *ebpf.Map, conn_map *ebpf.Map, numbers_map *ebpf.Map) {
@@ -402,7 +403,7 @@ func grabNumbersForConns(client_conn Connection, server_conn Connection, numbers
 	if err != nil {
 		fmt.Printf("LB - Initial Offsets: unable to retrieve numbers for client_conn: %v\n", err)
 	} else {
-		fmt.Printf("server.SrcPort is  %d server.DstPort is %d\n", server_conn.Src_port, server_conn.Dst_port)
+		//fmt.Printf("server.SrcPort is  %d server.DstPort is %d\n", server_conn.Src_port, server_conn.Dst_port)
 		err = numbers_map.Lookup(server_conn, &server_n)
 		if err != nil {
 			fmt.Printf("LB - Initial Offsets: unable to retrieve numbers for server_conn: %v\n", err)
@@ -465,7 +466,7 @@ func chooseServerConn(available_map *ebpf.Map) (*Connection, int) {
 	index := chosen_server_i * MAX_SERVERS
 
 	chosen_server := targets[index+level]
-	fmt.Println("CHOSEN_SERVER: ", chosen_server)
+	//fmt.Println("CHOSEN_SERVER: ", chosen_server)
 	round_robin += 1
 
 	return grabServerConn(chosen_server, available_map)
@@ -479,7 +480,7 @@ func grabServerConn(server Server, available_map *ebpf.Map) (*Connection, int) {
 	}
 
 	conn_ptr, index := findAvailableConn(availability)
-	fmt.Printf("Found at index: %d\n", index)
+	//fmt.Printf("Found at index: %d\n", index)
 	if conn_ptr == nil {
 		fmt.Printf("Unable to find a valid connection in availability struct\n")
 		return nil, -1
@@ -502,7 +503,7 @@ func grabServerConn(server Server, available_map *ebpf.Map) (*Connection, int) {
 
 func findAvailableConn(availability Availability) (*Connection, int) {
 	for i := 0; i < len(availability.Valid); i++ {
-		fmt.Printf("Index: %d, valid: %d, conn.src: %d\n", i, availability.Valid[i], availability.Conns[i].Src_port)
+		//fmt.Printf("Index: %d, valid: %d, conn.src: %d\n", i, availability.Valid[i], availability.Conns[i].Src_port)
 		if availability.Valid[i] == 0 {
 			return &availability.Conns[i], i
 		}
@@ -601,7 +602,7 @@ func convertToConnStruct(conn net.Conn) Connection {
 	c_loc_ip := c_localAddr.IP.String()
 	c_loc_port := uint32(c_localAddr.Port)
 
-	fmt.Println("local ip is: ", c_loc_ip)
+	//fmt.Println("local ip is: ", c_loc_ip)
 
 	c := Connection{
 		Src_port: c_loc_port,
@@ -610,7 +611,7 @@ func convertToConnStruct(conn net.Conn) Connection {
 		Dst_ip:   uint32(binary.BigEndian.Uint32(net.ParseIP(c_rem_ip).To4())),
 	}
 
-	fmt.Printf("conn srcPort: %d, dstPort %d, srcIP: %d, dstIP: %d\n", c.Src_port, c.Dst_port, c.Src_ip, c.Dst_ip)
+	//fmt.Printf("conn local_Port: %d, rem_Port %d, local_IP: %d, rem_IP: %d\n", c.Src_port, c.Dst_port, c.Src_ip, c.Dst_ip)
 	return c
 }
 

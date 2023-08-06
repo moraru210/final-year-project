@@ -512,7 +512,7 @@ int  xdp_prog_tcp(struct xdp_md *ctx)
 			} else {
 				nums_ptr->seq_no = ack_seq;
 				nums_ptr->ack_no = seq_no + payload_len;
-				if (bpf_map_update_elem(&numbers_map, &conn, nums_ptr, 0) < 0) {
+				if (bpf_map_update_elem(&numbers_map, &rev_conn, nums_ptr, 0) < 0) {
 					bpf_printk("NUMBERS - Unable to update numbers for (conn.src %u, conn.dst %u)\n", conn.src_port, conn.dst_port);
 				}
 			}

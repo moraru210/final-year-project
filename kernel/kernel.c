@@ -117,6 +117,22 @@ struct {
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } state_map SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, MAX_SERVERS);
+	__type(key, __u32);
+	__type(value, __u32);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+} target_count SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, MAX_SERVERS);
+	__type(key, __u32;
+	__type(value, struct server);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+} target_map SEC(".maps");
+
 struct hdr_cursor {
 	void *pos;
 };
